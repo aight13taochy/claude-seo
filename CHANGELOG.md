@@ -52,8 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `smartscraper`/`markdownify`/`searchscraper` set; the Python 3.10
   requirement is gone.
 
-### Fixed
-
 - `seo-content` now runs `content_quality.py` and `content_verify.py`. Both
   shipped in 2.0.0 but no skill or agent called them, so `/seo content` never
   used its own filler/AI-pattern scorer or its uncited-claim detector, even
