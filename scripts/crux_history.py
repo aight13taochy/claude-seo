@@ -28,8 +28,8 @@ try:
         get_api_key,
         google_api_key_headers,
         redact_google_api_key,
-        validate_url,
     )
+    from url_safety import validate_url
 except ImportError:
     import os
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -37,8 +37,8 @@ except ImportError:
         get_api_key,
         google_api_key_headers,
         redact_google_api_key,
-        validate_url,
     )
+    from url_safety import validate_url
 
 CRUX_HISTORY_ENDPOINT = "https://chromeuxreport.googleapis.com/v1/records:queryHistoryRecord"
 

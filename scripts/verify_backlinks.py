@@ -30,9 +30,8 @@ _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPTS_DIR)
 try:
     from fetch_page import fetch_page
-    from google_auth import validate_url
     from parse_html import parse_html
-    from url_safety import URLSafetyError, safe_requests_head
+    from url_safety import URLSafetyError, safe_requests_head, validate_url
 except ImportError as e:
     print(f"Error: Required scripts not found in scripts/: {e}", file=sys.stderr)
     sys.exit(1)

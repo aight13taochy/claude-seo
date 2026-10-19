@@ -39,6 +39,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 from url_safety import (  # noqa: E402  (sys.path massage above is intentional)
     URLSafetyError,
+    chromium_launch_args,
     make_safe_playwright_route_handler,
     validate_url_strict,
 )
@@ -112,9 +113,11 @@ def capture_screenshot(
 
     # SSRF pre-flight via the canonical safety module: resolves DNS,
     # rejects any non-public A record, blocks cloud-metadata endpoints.
+    # The same address is then pinned inside Chromium's own resolver.
     try:
-        url, _pinned_ip = validate_url_strict(url)
+        url, pinned_ip = validate_url_strict(url)
         result["url"] = url
+        chromium_args = chromium_launch_args(url, pinned_ip)
     except URLSafetyError as e:
         result["error"] = f"url_safety: {e}"
         return result
@@ -124,7 +127,7 @@ def capture_screenshot(
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=True, args=chromium_args)
             context = browser.new_context(
                 viewport={"width": vp["width"], "height": vp["height"]},
                 device_scale_factor=2 if viewport == "mobile" else 1,

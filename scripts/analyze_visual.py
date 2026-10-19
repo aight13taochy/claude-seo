@@ -24,6 +24,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 from url_safety import (  # noqa: E402  (sys.path massage above is intentional)
     URLSafetyError,
+    chromium_launch_args,
     make_safe_playwright_route_handler,
     validate_url_strict,
 )
@@ -86,8 +87,9 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
         return result
 
     try:
-        url, _pinned_ip = validate_url_strict(url)
+        url, pinned_ip = validate_url_strict(url)
         result["url"] = url
+        chromium_args = chromium_launch_args(url, pinned_ip)
     except URLSafetyError as e:
         result["error"] = f"url_safety: {e}"
         return result
@@ -96,7 +98,7 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=True, args=chromium_args)
 
             # Desktop analysis
             desktop = browser.new_context(viewport={"width": 1920, "height": 1080})

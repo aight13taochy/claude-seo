@@ -30,8 +30,8 @@ try:
         get_api_key,
         google_api_key_headers,
         redact_google_api_key,
-        validate_url,
     )
+    from url_safety import validate_url
 except ImportError:
     # Fallback: try relative import from scripts/
     import os
@@ -40,8 +40,8 @@ except ImportError:
         get_api_key,
         google_api_key_headers,
         redact_google_api_key,
-        validate_url,
     )
+    from url_safety import validate_url
 
 PSI_ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
 CRUX_ENDPOINT = "https://chromeuxreport.googleapis.com/v1/records:queryRecord"

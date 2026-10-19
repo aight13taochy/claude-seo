@@ -94,7 +94,7 @@ trailing slashes.
 Captures the current state of a page and stores it.
 
 **Steps:**
-1. Validate URL (SSRF protection via `google_auth.validate_url()`)
+1. Validate URL (SSRF protection via `url_safety.validate_url()`)
 2. Fetch page via `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run fetch_page.py <URL>`
 3. Parse HTML via `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run parse_html.py <URL>`
 4. Optionally fetch CWV via `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run pagespeed_check.py <URL>` (use `--skip-cwv` to skip)
