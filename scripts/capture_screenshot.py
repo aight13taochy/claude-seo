@@ -123,7 +123,7 @@ def capture_screenshot(
         return result
 
     vp = VIEWPORTS[viewport]
-    route_handler = make_safe_playwright_route_handler()
+    route_handler = make_safe_playwright_route_handler(top_level_url=url)
 
     try:
         with sync_playwright() as p:
@@ -137,6 +137,7 @@ def capture_screenshot(
             # Defence in depth: abort any subresource that lands on a
             # private IP even after Chromium re-resolves DNS.
             page.route("**/*", route_handler)
+            page.on("request", route_handler.watch_request)
 
             # Navigate and wait for network idle
             page.goto(url, wait_until="networkidle", timeout=timeout)
@@ -144,12 +145,19 @@ def capture_screenshot(
             # Wait a bit more for any lazy-loaded content
             page.wait_for_timeout(1000)
 
-            # Capture screenshot
+            # Capture screenshot, unless a redirect hop went somewhere the
+            # route handler would have refused (Playwright never routes hops).
+            route_handler.check_redirects()
             page.screenshot(path=output_path, full_page=full_page)
+            route_handler.check_redirects()
 
             result["success"] = True
             browser.close()
 
+    except URLSafetyError as e:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        result["error"] = f"url_safety: {e}"
     except PlaywrightTimeout:
         result["error"] = f"Page load timed out after {timeout}ms"
     except Exception as e:

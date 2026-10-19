@@ -141,6 +141,54 @@ def test_every_chromium_launch_passes_the_resolver_pin() -> None:
     assert len(found) >= 3, f"expected the known launch sites, found {found}"
 
 
+def _calls_named(tree: ast.AST, name: str) -> list[ast.Call]:
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == name)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == name)
+        )
+    ]
+
+
+def test_every_chromium_launch_guards_routes_and_redirect_hops() -> None:
+    """Each route handler knows its top-level URL (the only way a
+    CLAUDE_SEO_LOCAL_TARGETS origin can render), and each script watches the
+    redirect hops Playwright never routes, then refuses on a bad one."""
+    checked = []
+    for path in LAUNCHING_FILES:
+        tree = _tree(path)
+        if not _chromium_launches(tree):
+            continue
+        name = path.relative_to(ROOT).as_posix()
+        factories = _calls_named(tree, "make_safe_playwright_route_handler")
+        assert factories, f"{name} launches Chromium without a route handler"
+        for call in factories:
+            assert any(kw.arg == "top_level_url" for kw in call.keywords), (
+                f"{name}:{call.lineno} builds a route handler without top_level_url="
+            )
+        routes = _calls_named(tree, "route")
+        watches = [
+            call
+            for call in _calls_named(tree, "on")
+            if call.args
+            and isinstance(call.args[0], ast.Constant)
+            and call.args[0].value == "request"
+            and isinstance(call.args[1], ast.Attribute)
+            and call.args[1].attr == "watch_request"
+        ]
+        assert routes and len(watches) >= len(routes), (
+            f"{name} routes {len(routes)} page(s) but watches redirects on {len(watches)}"
+        )
+        assert _calls_named(tree, "check_redirects"), (
+            f"{name} never calls check_redirects()"
+        )
+        checked.append(name)
+    assert len(checked) >= 3, f"expected the known launch sites, found {checked}"
+
+
 # ---------------------------------------------------------------------------
 # chromium_launch_args
 # ---------------------------------------------------------------------------
@@ -185,6 +233,21 @@ def test_nothing_to_pin_returns_no_args(url: str, pinned_ip: str) -> None:
 def test_unpinnable_hostnames_are_refused(url: str) -> None:
     with pytest.raises(URLSafetyError):
         chromium_launch_args(url, "93.184.216.34")
+
+
+def test_allowlisted_local_targets_pin_sanely(monkeypatch) -> None:
+    """CLAUDE_SEO_LOCAL_TARGETS hands chromium_launch_args a non-public pin:
+    localhost is mapped to it, an IP literal needs no rule."""
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080,127.0.0.1:8080")
+    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
+    fake = [(url_safety.socket.AF_INET, url_safety.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 8080))]
+    with patch.object(url_safety.socket, "getaddrinfo", return_value=fake):
+        url, pinned = url_safety.validate_url_strict("http://localhost:8080/")
+        assert chromium_launch_args(url, pinned) == [
+            "--host-resolver-rules=MAP localhost 127.0.0.1"
+        ]
+        url, pinned = url_safety.validate_url_strict("http://127.0.0.1:8080/")
+        assert chromium_launch_args(url, pinned) == []
 
 
 def test_non_ip_pinned_address_is_refused() -> None:

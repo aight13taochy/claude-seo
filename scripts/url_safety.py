@@ -53,10 +53,13 @@ Local targets
 ``localhost:3000,127.0.0.1:8080,100.101.102.103``) that lets an operator
 audit a dev server, a staging host, or a machine reached over Tailscale.
 It is consulted **only** for the first, top-level URL handed to
-``validate_url`` / ``validate_url_strict``. Redirect targets, embedded
-subresources, and browser-issued requests never consult it, and cloud
-metadata endpoints are refused even when listed. Unset, the policy is
-exactly what it is without the feature.
+``validate_url`` / ``validate_url_strict``, and for that same URL when a
+renderer passes it to ``make_safe_playwright_route_handler(top_level_url=)``.
+The browser then admits that exact origin (scheme, host, and port) so the
+page can render; redirect targets, embedded subresources, other ports, and
+other hosts never consult the allowlist, and cloud metadata endpoints are
+refused even when listed. Unset, the policy is exactly what it is without
+the feature.
 
 Trusted proxy
 =============
@@ -88,9 +91,14 @@ Python layer. Those scripts must:
   1. Call ``validate_url_strict()`` as a pre-flight check, AND
   2. Launch Chromium with ``chromium_launch_args(url, pinned_ip)``, which
      pins the audited host to the pre-flight IP inside Chromium, AND
-  3. Attach a Playwright ``route()`` handler that re-validates each
+  3. Attach a Playwright ``route()`` handler, built with
+     ``top_level_url=`` the validated URL, that re-validates each
      resolved request IP and aborts subresource fetches to private
-     ranges.
+     ranges, AND
+  4. Register ``page.on("request", handler.watch_request)`` and call
+     ``handler.check_redirects()`` before using anything the page
+     produced. Playwright never routes a 30x hop; this refuses the
+     render when a hop went somewhere the handler would have refused.
 
 The residual DNS-rebinding risk for browser-based fetches (hosts other
 than the audited one) is documented in SECURITY.md.
@@ -255,8 +263,10 @@ def is_safe_ip(ip_str: str) -> bool:
 # The allowlist is therefore narrow by construction:
 #
 #   * It is consulted for the FIRST, top-level URL only, in ``validate_url``
-#     and ``validate_url_strict``. Redirect targets, embedded subresources,
-#     and browser-issued requests never reach it: those go through
+#     and ``validate_url_strict``, and in ``make_safe_playwright_route_handler``
+#     for the ``top_level_url`` a renderer passes, whose exact origin the
+#     browser may then load. Redirect targets, embedded subresources, and
+#     every other browser request never reach it: those go through
 #     ``is_safe_ip`` and ``_BLOCKED_HOSTNAMES``, which this module keeps
 #     free of any environment dependency.
 #   * A host must be named. There is no range, wildcard, or "all private".
@@ -556,8 +566,9 @@ def validate_url_strict(url: str) -> tuple[str, str]:
     if port is None:
         raise URLSafetyError(f"Invalid port in URL authority: {url!r}")
 
-    # The CLAUDE_SEO_LOCAL_TARGETS allowlist is read here and nowhere the
-    # request chain can reach later, which is what keeps it top-level only.
+    # The CLAUDE_SEO_LOCAL_TARGETS allowlist is read here, and by the route
+    # handler for the same top-level URL, never for a URL the request chain
+    # produces later, which is what keeps it top-level only.
     allowlisted = _is_allowlisted_local_target(hostname, port)
     if hostname in _BLOCKED_HOSTNAMES and not allowlisted:
         raise URLSafetyError(f"Blocked hostname: {hostname}")
@@ -730,6 +741,19 @@ def _validated_proxy_hosts(url: str, proxies: Optional[dict] = None) -> frozense
 _dns_patch_lock = threading.Lock()
 
 
+def _port_matches(requested, port: int) -> bool:
+    """True when a ``getaddrinfo`` port argument is absent or equals ``port``.
+
+    A service name or anything else unparseable does not match.
+    """
+    if requested is None or requested == "":
+        return True
+    try:
+        return int(requested) == port
+    except (TypeError, ValueError):
+        return False
+
+
 @contextmanager
 def _pin_dns(
     hostname: str,
@@ -777,11 +801,20 @@ def _pin_dns(
 
     original_getaddrinfo = socket.getaddrinfo
     target = hostname.lower()
+    # A non-public pin exists only because CLAUDE_SEO_LOCAL_TARGETS named
+    # this host and port. It answers for that port alone, so a 30x to the
+    # same host on another port takes the fall-through check and is refused.
+    pinned_port_only = bool(pinned_ip) and not is_safe_ip(pinned_ip)
 
     def patched(host, requested_port, *args, **kwargs):
         # Branch 1: the originally-pinned host returns the validated IP
         # without any further resolver call.
-        if host and host.lower() == target and pinned_ip:
+        if (
+            host
+            and host.lower() == target
+            and pinned_ip
+            and (not pinned_port_only or _port_matches(requested_port, port))
+        ):
             family = kwargs.get("family", args[0] if args else 0)
             if family in (0, socket.AF_UNSPEC, socket.AF_INET):
                 return [(
@@ -1013,9 +1046,147 @@ def safe_requests_session(url: str) -> Iterator[requests.Session]:
             session.close()
 
 
+def _allowlisted_origin(url: str) -> Optional[tuple[str, str, int]]:
+    """``(scheme, host, port)`` of ``url`` if ``CLAUDE_SEO_LOCAL_TARGETS`` names it.
+
+    Returns ``None`` for anything unparseable, unlisted, or never
+    allowlistable, so a bad ``top_level_url`` widens nothing.
+    """
+    try:
+        parsed = urlparse(url)
+        _reject_authority_confusion(url, parsed)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return None
+        host = normalize_hostname(parsed.hostname)
+    except (URLSafetyError, ValueError):
+        return None
+    port = _url_port(parsed)
+    if port is None or not _is_allowlisted_local_target(host, port):
+        return None
+    return parsed.scheme, host, port
+
+
+class _SafeRouteHandler:
+    """The callable :func:`make_safe_playwright_route_handler` returns.
+
+    ``handler(route, request)`` is the ``page.route()`` callback. Playwright
+    calls it for the first URL of a request only, never for the hops of a
+    30x redirect, so :meth:`watch_request` (a ``page.on("request")``
+    listener) judges those hops by the same rule and
+    :meth:`check_redirects` refuses the render after the fact.
+    """
+
+    def __init__(
+        self,
+        blocked_resource_types: Optional[set],
+        local_origin: Optional[tuple[str, str, int]],
+    ) -> None:
+        self._blocked = set(blocked_resource_types or ())
+        self._local_origin = local_origin
+        self.redirect_violations: list[str] = []
+
+    def __call__(self, route, request) -> None:  # type: ignore[no-untyped-def]
+        try:
+            if self._blocked and request.resource_type in self._blocked:
+                route.abort()
+                return
+            if self._allows(request.url):
+                route.continue_()
+            else:
+                route.abort()
+        except Exception:  # pragma: no cover - fail-closed
+            try:
+                route.abort()
+            except Exception:
+                pass
+
+    def watch_request(self, request) -> None:  # type: ignore[no-untyped-def]
+        """Record a redirect hop the route callback never saw, if refused.
+
+        Chromium has already sent that request by the time it is reported;
+        what this prevents is the render's output (content, screenshot,
+        measurements) reaching the caller.
+        """
+        url = "<unreadable redirect target>"
+        try:
+            if request.redirected_from is None:
+                return
+            url = request.url
+            if self._allows(url):
+                return
+        except Exception:  # pragma: no cover - fail-closed
+            pass
+        self.redirect_violations.append(url)
+
+    def check_redirects(self) -> None:
+        """Raise ``URLSafetyError`` if the browser followed a refused redirect."""
+        if self.redirect_violations:
+            raise URLSafetyError(
+                "Browser followed a redirect to a refused target: "
+                f"{self.redirect_violations[0]}"
+            )
+
+    def _allows(self, url: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            # data:, blob:, chrome-extension:, etc.: no DNS involved.
+            return True
+        host = parsed.hostname
+        if not host:
+            return False
+
+        try:
+            normalized = normalize_hostname(host)
+        except URLSafetyError:
+            return False
+
+        # The audited origin itself, when the operator allowlisted it.
+        # _allowlisted_origin already refused metadata endpoints.
+        local = (
+            self._local_origin is not None
+            and (parsed.scheme, normalized, _url_port(parsed)) == self._local_origin
+        )
+
+        def acceptable(ip_str: str) -> bool:
+            return is_safe_ip(ip_str) or (local and _is_allowlistable_ip(ip_str))
+
+        # Hostname-level blocks short-circuit DNS resolution entirely
+        # (e.g. attacker.example/redirect -> metadata.google.internal).
+        if normalized in _BLOCKED_HOSTNAMES and not local:
+            return False
+
+        # An IP literal needs no resolver and is judged on the spot, so
+        # the trusted-proxy path below cannot carry a private literal.
+        if _looks_like_ip(normalized):
+            return acceptable(normalized)
+
+        # Chromium sends this request through the same configured proxy
+        # (it reads the proxy environment on Linux and the system proxy
+        # elsewhere); with CLAUDE_SEO_TRUST_PROXY the proxy resolves it.
+        if _trust_proxy_enabled() and _proxy_hosts(url):
+            return True
+
+        # Dual-stack resolution: Chromium may use IPv6 even when a
+        # host has IPv4 records. AF_UNSPEC returns both families;
+        # any single non-public record aborts the request.
+        try:
+            addrinfo = socket.getaddrinfo(
+                normalized,
+                None,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM,
+            )
+        except socket.gaierror:
+            return False
+        ips = {info[4][0] for info in addrinfo}
+        return bool(ips) and all(acceptable(ip) for ip in ips)
+
+
 def make_safe_playwright_route_handler(
     blocked_resource_types: Optional[set] = None,
-):
+    *,
+    top_level_url: Optional[str] = None,
+) -> _SafeRouteHandler:
     """
     Build a Playwright ``page.route()`` callback that aborts subresource
     requests whose hostname resolves to a non-public IP.
@@ -1026,88 +1197,33 @@ def make_safe_playwright_route_handler(
     re-validates every request URL using the same predicate as
     :func:`validate_url_strict`.
 
+    Playwright does not call a route handler for redirect hops. Callers
+    therefore also register ``page.on("request", handler.watch_request)``
+    and call ``handler.check_redirects()`` before using anything the page
+    produced; it raises ``URLSafetyError`` when a hop went somewhere the
+    handler would have refused.
+
     Args:
         blocked_resource_types: optional set of Playwright resource type
             strings (``image``, ``media``, ``font``, ``stylesheet``,
             ``script``, ``xhr``, ``fetch``, ``websocket``, ``manifest``,
             ``other``) to abort regardless of IP. Used for fast
             "skip images and fonts" renders.
+        top_level_url: the URL returned by :func:`validate_url_strict` for
+            this render. When ``CLAUDE_SEO_LOCAL_TARGETS`` names it, requests
+            to that exact origin (scheme, host, and port) are judged against
+            the allowlist ceiling instead of :func:`is_safe_ip`, so a local
+            dev server can render its own page and assets. Every other
+            origin, including the same host on another port, keeps the
+            default policy. The allowlist is read once, here, for the
+            top-level URL; no request the page issues can widen it.
 
     Returns:
         Callable ``(route, request) -> None`` suitable for
         ``page.route("**/*", handler)``.
     """
-    blocked = set(blocked_resource_types or ())
-
-    def handler(route, request):  # type: ignore[no-untyped-def]
-        try:
-            if blocked and request.resource_type in blocked:
-                route.abort()
-                return
-
-            parsed = urlparse(request.url)
-            if parsed.scheme not in ("http", "https"):
-                # data:, blob:, chrome-extension:, etc.: no DNS involved.
-                route.continue_()
-                return
-            host = parsed.hostname
-            if not host:
-                route.abort()
-                return
-
-            try:
-                normalized = normalize_hostname(host)
-            except URLSafetyError:
-                route.abort()
-                return
-
-            # Hostname-level blocks short-circuit DNS resolution entirely
-            # (e.g. attacker.example/redirect -> metadata.google.internal).
-            if normalized in _BLOCKED_HOSTNAMES:
-                route.abort()
-                return
-
-            # An IP literal needs no resolver and is judged on the spot, so
-            # the trusted-proxy path below cannot carry a private literal.
-            if _looks_like_ip(normalized):
-                if is_safe_ip(normalized):
-                    route.continue_()
-                else:
-                    route.abort()
-                return
-
-            # Chromium sends this request through the same configured proxy
-            # (it reads the proxy environment on Linux and the system proxy
-            # elsewhere); with CLAUDE_SEO_TRUST_PROXY the proxy resolves it.
-            if _trust_proxy_enabled() and _proxy_hosts(request.url):
-                route.continue_()
-                return
-
-            # Dual-stack resolution: Chromium may use IPv6 even when a
-            # host has IPv4 records. AF_UNSPEC returns both families;
-            # any single non-public record aborts the request.
-            try:
-                addrinfo = socket.getaddrinfo(
-                    normalized,
-                    None,
-                    family=socket.AF_UNSPEC,
-                    type=socket.SOCK_STREAM,
-                )
-            except socket.gaierror:
-                route.abort()
-                return
-            ips = {info[4][0] for info in addrinfo}
-            if not ips or any(not is_safe_ip(ip) for ip in ips):
-                route.abort()
-                return
-            route.continue_()
-        except Exception:  # pragma: no cover - fail-closed
-            try:
-                route.abort()
-            except Exception:
-                pass
-
-    return handler
+    local_origin = _allowlisted_origin(top_level_url) if top_level_url else None
+    return _SafeRouteHandler(blocked_resource_types, local_origin)
 
 
 # Characters Chromium accepts in a --host-resolver-rules hostname. A rule

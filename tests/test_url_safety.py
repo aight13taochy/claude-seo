@@ -1055,8 +1055,9 @@ def test_allowlisted_host_is_refused_as_a_redirect_target(monkeypatch) -> None:
 
 
 def test_allowlisted_host_is_refused_as_a_browser_subresource(monkeypatch) -> None:
-    """The Playwright route handler never reads the allowlist, so a rendered
-    page cannot pull a subresource off the allowlisted dev server."""
+    """Without a top_level_url the Playwright route handler never reads the
+    allowlist, so a rendered page cannot pull a subresource off the
+    allowlisted dev server."""
     monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:3000,127.0.0.1:8080")
     handler = url_safety.make_safe_playwright_route_handler()
     resolver = _loopback_resolver({"localhost": "127.0.0.1"})
@@ -1067,6 +1068,150 @@ def test_allowlisted_host_is_refused_as_a_browser_subresource(monkeypatch) -> No
         route = _FakeRoute()
         handler(route, _FakeRequest("http://127.0.0.1:8080/app.js", "script"))
         assert route.action == "abort"
+
+
+def _route_action(handler, url: str, resource_type: str = "document") -> str | None:
+    route = _FakeRoute()
+    handler(route, _FakeRequest(url, resource_type))
+    return route.action
+
+
+def test_route_handler_admits_the_allowlisted_top_level_origin(monkeypatch) -> None:
+    """The page under audit, and its own same-origin assets, render."""
+    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080,127.0.0.1:8080")
+    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        handler = url_safety.make_safe_playwright_route_handler(
+            top_level_url="http://localhost:8080/"
+        )
+        assert _route_action(handler, "http://localhost:8080/") == "continue"
+        assert _route_action(handler, "http://LocalHost.:8080/app.js", "script") == "continue"
+
+        literal = url_safety.make_safe_playwright_route_handler(
+            top_level_url="http://127.0.0.1:8080/"
+        )
+        assert _route_action(literal, "http://127.0.0.1:8080/") == "continue"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:9090/",       # same host, another port
+        "http://localhost/",            # same host, default port
+        "https://localhost:8080/",      # same host and port, another scheme
+        "http://127.0.0.1:8080/",       # same machine, another spelling
+        "http://127.0.0.2:8080/",       # another loopback address
+        "http://192.168.1.10:8080/",    # a private address
+        "http://169.254.169.254/latest/meta-data/",
+    ],
+)
+def test_route_handler_exemption_is_the_exact_origin_only(monkeypatch, url) -> None:
+    """Every origin but the audited one keeps the default policy, even when
+    the allowlist would name it at the top level."""
+    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost,127.0.0.1:8080")
+    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        handler = url_safety.make_safe_playwright_route_handler(
+            top_level_url="http://localhost:8080/"
+        )
+        assert _route_action(handler, url) == "abort"
+
+
+def test_route_handler_ignores_an_unlisted_top_level_url(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:3000")
+    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        for top in ("http://localhost:8080/", "https://public.example/", "not a url"):
+            handler = url_safety.make_safe_playwright_route_handler(top_level_url=top)
+            assert _route_action(handler, "http://localhost:8080/") == "abort", top
+        monkeypatch.delenv("CLAUDE_SEO_LOCAL_TARGETS")
+        handler = url_safety.make_safe_playwright_route_handler(
+            top_level_url="http://localhost:3000/"
+        )
+        assert _route_action(handler, "http://localhost:3000/") == "abort"
+
+
+def test_route_handler_exemption_keeps_the_allowlist_ceiling(monkeypatch) -> None:
+    """A listed name that resolves to link-local, or a listed metadata
+    endpoint, is still refused inside the browser."""
+    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "sneaky.local:80,169.254.169.254:80")
+    resolver = _loopback_resolver({"sneaky.local": "169.254.169.254"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        handler = url_safety.make_safe_playwright_route_handler(
+            top_level_url="http://sneaky.local/"
+        )
+        assert _route_action(handler, "http://sneaky.local/") == "abort"
+        handler = url_safety.make_safe_playwright_route_handler(
+            top_level_url="http://169.254.169.254/"
+        )
+        assert _route_action(handler, "http://169.254.169.254/") == "abort"
+
+
+class _FakeRedirectedRequest(_FakeRequest):
+    def __init__(self, url: str, redirected_from=None) -> None:
+        super().__init__(url)
+        self.redirected_from = redirected_from
+
+
+def test_redirect_hops_are_judged_by_the_route_rule(monkeypatch) -> None:
+    """Playwright never routes a redirect hop; watch_request records the ones
+    the route handler would have aborted, and check_redirects refuses."""
+    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080")
+    resolver = _loopback_resolver({"localhost": "127.0.0.1", "cdn.example": "93.184.216.34"})
+    first = _FakeRedirectedRequest("http://localhost:8080/old")
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        handler = url_safety.make_safe_playwright_route_handler(
+            top_level_url="http://localhost:8080/"
+        )
+        handler.watch_request(first)  # not a redirect hop
+        handler.watch_request(_FakeRedirectedRequest("http://localhost:8080/new", first))
+        handler.watch_request(_FakeRedirectedRequest("https://cdn.example/a.js", first))
+        handler.check_redirects()
+        assert handler.redirect_violations == []
+
+        handler.watch_request(_FakeRedirectedRequest("http://localhost:9090/admin", first))
+        handler.watch_request(_FakeRedirectedRequest("http://169.254.169.254/", first))
+    assert handler.redirect_violations == [
+        "http://localhost:9090/admin",
+        "http://169.254.169.254/",
+    ]
+    with pytest.raises(url_safety.URLSafetyError, match="localhost:9090"):
+        handler.check_redirects()
+
+
+def test_redirect_watch_fails_closed_on_an_unreadable_request() -> None:
+    class _Broken:
+        @property
+        def redirected_from(self):
+            raise RuntimeError("target closed")
+
+    handler = url_safety.make_safe_playwright_route_handler()
+    handler.watch_request(_Broken())
+    with pytest.raises(url_safety.URLSafetyError):
+        handler.check_redirects()
+
+
+def test_non_public_pin_answers_for_the_audited_port_only(monkeypatch) -> None:
+    """A 30x from the allowlisted localhost:3000 to localhost:9090 would
+    otherwise ride the pin; it takes the fall-through check instead."""
+    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        with url_safety._pin_dns("localhost", "127.0.0.1", 3000):
+            assert socket.getaddrinfo("localhost", 3000)[0][4] == ("127.0.0.1", 3000)
+            for port in (9090, "9090", "http"):
+                with pytest.raises(socket.gaierror, match="non-public IP"):
+                    socket.getaddrinfo("localhost", port)
+
+
+def test_public_pin_still_answers_for_any_port() -> None:
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
+        with url_safety._pin_dns("audited.example", "93.184.216.34", 443):
+            assert socket.getaddrinfo("audited.example", 8443)[0][4] == ("93.184.216.34", 8443)
 
 
 def test_local_target_entries_are_normalized(monkeypatch) -> None:

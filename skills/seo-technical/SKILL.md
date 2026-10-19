@@ -255,8 +255,9 @@ What it does and does not cover:
 |-----------|------------------|
 | First, top-level URL over raw HTTP | Allowed |
 | Redirect target reached from that URL | Refused |
-| Subresource fetched by a rendered page | Refused |
-| Playwright renders (`--render`, screenshots) | Refused; use the raw-HTTP path |
+| Playwright renders (`--render`, screenshots) of that URL | Allowed for that exact origin (scheme, host, port) |
+| Subresource from that same origin in a rendered page | Allowed |
+| Subresource or redirect to any other origin, including another port | Refused |
 | A host not named in the variable | Refused |
 | Cloud metadata endpoints, even when listed | Refused |
 

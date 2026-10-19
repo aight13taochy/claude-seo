@@ -436,6 +436,45 @@ def test_render_surfaces_accessibility_capture_failure() -> None:
     assert result["accessibility_error"] in result["render_diagnostics"]
 
 
+class _RedirectingBrowserPage(_FakeBrowserPage):
+    """Chromium follows a 30x the route handler never sees."""
+
+    def __init__(self, hop_url):
+        super().__init__([(200, 20), (200, 20), (200, 20)])
+        self.hop_url = hop_url
+        self.listeners = []
+
+    def on(self, event, callback):
+        if event == "request":
+            self.listeners.append(callback)
+
+    def goto(self, url, **kwargs):
+        first = SimpleNamespace(url=url, redirected_from=None)
+        hop = SimpleNamespace(url=self.hop_url, redirected_from=first)
+        for callback in self.listeners:
+            callback(first)
+            callback(hop)
+        return super().goto(url, **kwargs)
+
+
+def test_render_discards_a_page_reached_through_a_refused_redirect() -> None:
+    page = _RedirectingBrowserPage("http://169.254.169.254/latest/meta-data/")
+    result = _render_with_fake_browser(page, extract_accessibility=True)
+    assert page.listeners, "render_page must watch redirect hops"
+    assert result["error"].startswith("url_safety:")
+    assert "169.254.169.254" in result["error"]
+    assert result["content"] is None
+    assert result["accessibility_tree"] is None
+    assert result["raw_fallback_available"] is True
+
+
+def test_render_keeps_a_page_reached_through_an_allowed_redirect() -> None:
+    page = _RedirectingBrowserPage("https://1.1.1.1/landing")
+    result = _render_with_fake_browser(page)
+    assert result["error"] is None
+    assert result["content"].startswith("<html>")
+
+
 def test_render_page_auto_stays_raw_for_static_html() -> None:
     """auto mode + non-SPA raw HTML → no Playwright invocation."""
     rich_html = "<html><body>" + ("hello world. " * 20) + "</body></html>"

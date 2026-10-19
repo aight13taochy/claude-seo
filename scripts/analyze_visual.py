@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -94,7 +95,8 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
         result["error"] = f"url_safety: {e}"
         return result
 
-    route_handler = make_safe_playwright_route_handler()
+    route_handler = make_safe_playwright_route_handler(top_level_url=url)
+    empty_result = copy.deepcopy(result)
 
     try:
         with sync_playwright() as p:
@@ -104,6 +106,7 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
             desktop = browser.new_context(viewport={"width": 1920, "height": 1080})
             page = desktop.new_page()
             page.route("**/*", route_handler)
+            page.on("request", route_handler.watch_request)
             page.goto(url, wait_until="networkidle", timeout=timeout)
 
             # Check H1 visibility above fold
@@ -159,6 +162,7 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
             mobile = browser.new_context(viewport={"width": 375, "height": 812})
             page = mobile.new_page()
             page.route("**/*", route_handler)
+            page.on("request", route_handler.watch_request)
             page.goto(url, wait_until="networkidle", timeout=timeout)
 
             # Check viewport meta
@@ -181,9 +185,15 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
             result["fonts"]["base_size"] = base_font_size
             result["fonts"]["readable"] = base_font_size >= 16
 
+            route_handler.check_redirects()
             mobile.close()
             browser.close()
 
+    except URLSafetyError as e:
+        # A redirect hop went somewhere the route handler would have refused
+        # (Playwright never routes hops): report none of what was measured.
+        result = copy.deepcopy(empty_result)
+        result["error"] = f"url_safety: {e}"
     except PlaywrightTimeout:
         result["error"] = f"Page load timed out after {timeout}ms"
     except Exception as e:

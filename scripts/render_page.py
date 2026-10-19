@@ -512,7 +512,7 @@ def render_page(
 
         vp = VIEWPORTS[viewport]
         blocked = set(block_resources or [])
-        route_handler = make_safe_playwright_route_handler(blocked)
+        route_handler = make_safe_playwright_route_handler(blocked, top_level_url=norm_url)
         start = time.monotonic()
 
         try:
@@ -531,6 +531,7 @@ def render_page(
 
                 page.on("console", _on_console)
                 page.route("**/*", route_handler)
+                page.on("request", route_handler.watch_request)
 
                 try:
                     response = page.goto(
@@ -581,7 +582,17 @@ def render_page(
                             result["accessibility_error"]
                         )
 
+                route_handler.check_redirects()
                 browser.close()
+        except URLSafetyError as exc:
+            # Chromium followed a redirect the route handler never saw to a
+            # refused target: nothing this render captured is returned.
+            result["content"] = None
+            result["accessibility_tree"] = None
+            result["console_errors"] = []
+            result["error"] = f"url_safety: {exc}"
+            _keep_raw_on_render_failure()
+            return result
         except Exception as exc:
             result["error"] = f"playwright error: {exc}"
             _keep_raw_on_render_failure()
