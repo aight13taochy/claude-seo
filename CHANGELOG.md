@@ -161,6 +161,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had that signature (Node exited 1, not 2); this fix is not yet confirmed to
   end it.
 
+- Documentation that contradicted the code:
+  - README.md said "10 MCP extensions" in one place and "extensions for 9
+    servers" in another. There are 10 extensions, and 5 of them register an
+    MCP server. AGENTS.md had the same mislabel.
+  - docs/COMMANDS.md gave drift severities as CRITICAL/HIGH/MEDIUM; the
+    engine uses CRITICAL/WARNING/INFO. It also listed fields that a drift
+    baseline does not store (hreflang, internal links, sitemap entry,
+    indexability, redirect chain).
+  - `seo-drift` and `seo-ecommerce` credited SSRF protection to the
+    parse-time `validate_url()`. They now name the strict, DNS-pinned check
+    in the script that actually connects (`fetch_page.py`, `render_page.py`).
+
 ### Security
 
 - `/seo unlighthouse` no longer reaches private addresses through

@@ -94,7 +94,7 @@ trailing slashes.
 Captures the current state of a page and stores it.
 
 **Steps:**
-1. Validate URL (SSRF protection via `url_safety.validate_url()`)
+1. Validate URL: the script rejects non-public URLs up front with the parse-time `url_safety.validate_url()`, and `fetch_page.py` re-checks with `validate_url_strict()` (DNS resolved and pinned) before it connects
 2. Fetch page via `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run fetch_page.py <URL>`
 3. Parse HTML via `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run parse_html.py <URL>`
 4. Optionally fetch CWV via `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run pagespeed_check.py <URL>` (use `--skip-cwv` to skip)
@@ -177,7 +177,7 @@ When drift is detected, recommend the appropriate specialized skill:
 |----------|--------|
 | URL unreachable | Report error from `fetch_page.py`. Do not guess state. Suggest user verify URL. |
 | No baseline exists for URL | Inform user and suggest running `baseline` first. |
-| SSRF blocked (private IP) | Report `validate_url()` rejection. Never bypass. |
+| SSRF blocked (private IP) | Report the rejection (from `validate_url()` or the strict check in `fetch_page.py`). Never bypass. |
 | SQLite database missing | Auto-create on first use. No error. |
 | CWV fetch fails (no API key) | Store `null` for CWV fields. Skip CWV rules during comparison. |
 | Page returns 4xx/5xx | Still capture as baseline (status code IS a tracked field). |

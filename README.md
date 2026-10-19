@@ -143,7 +143,7 @@ claude
 
 ![Claude SEO sub-skill ecosystem: 26 modules grouped into 8 categories (audit, content, schema, technical, AI search, local + maps, commerce + intl, extensions) around the central orchestrator](assets/sub-skills.svg)
 
-35 user-invocable `/seo` commands across the orchestrator, its sub-skills, and 10 MCP extensions. Full reference in [docs/COMMANDS.md](docs/COMMANDS.md).
+35 user-invocable `/seo` commands across the orchestrator, its sub-skills, and 10 optional extensions. Full reference in [docs/COMMANDS.md](docs/COMMANDS.md).
 
 | Command | Description |
 |---------|-------------|
@@ -387,7 +387,7 @@ curl -fsSL https://raw.githubusercontent.com/AgriciDaniel/claude-seo/main/uninst
 
 ## Extensions
 
-Optional MCP servers add live data to the audit pipeline. Claude SEO ships extensions for 9 servers; the plugin core works without any of them.
+Optional extensions add live data and tooling to the audit pipeline. Claude SEO ships 10: five register an MCP server (DataForSEO, Firecrawl, ScrapeGraphAI, Banana, Ahrefs), and five call a vendor API or a local CLI (SE Ranking, Profound, Bing Webmaster, Matomo, Unlighthouse). The plugin core works without any of them.
 
 ### DataForSEO
 

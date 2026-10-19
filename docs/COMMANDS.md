@@ -458,9 +458,9 @@ SEO drift monitoring. Captures baselines of SEO-critical page elements and compa
 /seo drift history https://example.com
 ```
 
-**What it tracks:** title, meta description, canonical, hreflang, Open Graph, schema, headings, internal links, robots, sitemap entry, indexability, Core Web Vitals, response status, redirect chain.
+**What it tracks:** title, meta description, canonical, robots directives, H1-H3 headings, JSON-LD schema, Open Graph, Core Web Vitals, HTTP status code, and SHA-256 hashes of the HTML and the schema.
 
-**17 comparison rules** classify changes by severity (CRITICAL, HIGH, MEDIUM). SQLite-backed baselines.
+**17 comparison rules** classify changes by severity (CRITICAL, WARNING, INFO). SQLite-backed baselines.
 
 ---
 

@@ -170,7 +170,7 @@ skills/                    # 26 sub-skills (auto-discovered)
 agents/                    # 19 subagents
 scripts/                   # 61 Python scripts, including the managed runtime
 schema/                    # JSON-LD templates
-extensions/                # 10 MCP extensions: DataForSEO, Firecrawl, ScrapeGraphAI, Banana, Ahrefs, SE Ranking, Profound, Bing Webmaster, Matomo, Unlighthouse
+extensions/                # 10 optional extensions (5 MCP servers): DataForSEO, Firecrawl, ScrapeGraphAI, Banana, Ahrefs, SE Ranking, Profound, Bing Webmaster, Matomo, Unlighthouse
 ```
 
 ## Key Principles
