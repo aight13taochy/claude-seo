@@ -20,6 +20,19 @@ runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test inherits the caller's own data-dir configuration.
+
+    ``CLAUDE_SEO_DATA_DIR`` outranks ``CLAUDE_PLUGIN_DATA`` in
+    ``runtime._data_dir``, so a session that exports it (a cloud environment,
+    a developer shell) would silently redirect every test that sets
+    ``CLAUDE_PLUGIN_DATA``.
+    """
+    for name in ("CLAUDE_SEO_DATA_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _fixture_root(tmp_path: Path) -> Path:
     root = tmp_path / "plugin root"
     (root / "scripts").mkdir(parents=True)
