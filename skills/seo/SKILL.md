@@ -214,7 +214,7 @@ Maps-specific references (loaded by seo-maps skill, not at startup):
 ## Scoring Methodology
 
 ### SEO Health Score (0-100)
-Weighted aggregate of all categories:
+Weighted aggregate of the categories below, computed by `audit_score.py` (the source of truth for these weights):
 
 | Category | Weight |
 |----------|--------|
