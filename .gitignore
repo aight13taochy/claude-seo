@@ -108,8 +108,13 @@ seo command demo.gif
 Google-SEO-Report-*.html
 Google-SEO-Report-*.pdf
 
-# Claude Code local config (project-specific permissions, not for repo)
-.claude/
+# Claude Code local config (project-specific permissions, not for repo).
+# The shared project settings and hooks below are tracked on purpose: they
+# register this fork as a marketplace and set up the runtime in cloud sessions.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/settings.local.json
 .superpowers/
 
 # Local credential config (matomo.json etc., harness-independent API tokens)

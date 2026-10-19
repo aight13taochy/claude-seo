@@ -67,6 +67,13 @@ claude-seo is a research and audit toolkit that runs on a user's workstation. It
   - `is_safe_ip` is unchanged and reads no environment, so every fail-closed path downstream of the first connection is unaffected.
   - Unset, claude-seo behaves exactly as it did before the flag existed.
 
+- **A loopback or private HTTP proxy is refused by default; `CLAUDE_SEO_TRUST_PROXY=1` is the opt-in.** Some sandboxes have no DNS resolver at all and route every outbound connection through an HTTP CONNECT proxy on loopback that applies the network policy (claude.ai cloud environments, locked-down CI runners, some corporate desktops). Under the default policy nothing leaves such a host: `validate_url_strict` cannot resolve the target, and since v2.3.0 a proxy on a non-public address is refused (#280). Setting `CLAUDE_SEO_TRUST_PROXY=1` declares that proxy the boundary. Its scope is deliberately narrow:
+  - It applies only to a URL that `requests` would send through a configured proxy (`HTTPS_PROXY` and friends, honouring `NO_PROXY`, or an explicit `proxies=` mapping). A direct connection keeps the full resolve-and-pin policy, flag or no flag.
+  - The proxy may sit on loopback, RFC 1918, or RFC 6598, up to the `CLAUDE_SEO_LOCAL_TARGETS` ceiling: a link-local, metadata, multicast, unspecified, or reserved proxy address, by literal or by resolution, is refused with or without the flag.
+  - The target hostname is not resolved locally; the proxy resolves it. Scheme, authority-confusion, hostname-blocklist, and IP-literal checks still run before anything is sent, in `validate_url_strict` and in the Playwright route handler alike, so `http://169.254.169.254/`, `http://metadata.google.internal/`, and `http://10.0.0.5/` are refused exactly as before.
+  - What moves to the proxy is the check that a *name* does not resolve to a private address. Set the flag only where the proxy enforces that itself; a bare `HTTPS_PROXY` pointing at an open relay is not such a proxy.
+  - Unset, claude-seo behaves exactly as it did before the flag existed.
+
 ## Security-relevant code paths
 
 If you are auditing, these are the high-leverage files:

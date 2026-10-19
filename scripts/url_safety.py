@@ -58,6 +58,18 @@ subresources, and browser-issued requests never consult it, and cloud
 metadata endpoints are refused even when listed. Unset, the policy is
 exactly what it is without the feature.
 
+Trusted proxy
+=============
+``CLAUDE_SEO_TRUST_PROXY=1`` is an opt-in for sandboxes that have no DNS
+resolver and route every outbound connection through an HTTP CONNECT proxy
+(claude.ai cloud environments, locked-down CI runners). It applies only to
+a URL that ``requests`` would send through a configured proxy: that proxy
+may then sit on loopback or a private range, and the target hostname is
+resolved by the proxy instead of this process. Scheme, hostname-blocklist,
+and IP-literal checks still run; metadata and link-local addresses stay
+refused everywhere. Unset, the policy is exactly what it is without the
+feature. See the ``_TRUST_PROXY_ENV`` block below and SECURITY.md.
+
 Threading
 =========
 The DNS pinning helper is a critical section guarded by a non-blocking
@@ -252,6 +264,50 @@ def is_safe_ip(ip_str: str) -> bool:
 #     allowlist exists to permit, and fd00:ec2::254 is unique-local rather
 #     than link-local, so no single address predicate catches all three.
 _LOCAL_TARGETS_ENV = "CLAUDE_SEO_LOCAL_TARGETS"
+
+
+# ---------------------------------------------------------------------------
+# CLAUDE_SEO_TRUST_PROXY: delegate egress policy to a configured CONNECT proxy
+# ---------------------------------------------------------------------------
+#
+# Some sandboxes (claude.ai cloud environments, locked-down CI runners, some
+# corporate desktops) have no DNS resolver at all and route every outbound
+# connection through an HTTP CONNECT proxy on loopback. The proxy applies
+# the network policy; the process cannot resolve anything itself. Under the
+# default policy nothing leaves such a host: ``validate_url_strict`` fails on
+# the resolver, and a loopback proxy is refused as non-public (#280).
+#
+# ``CLAUDE_SEO_TRUST_PROXY=1`` is the explicit opt-in for that topology. It
+# is narrow by construction:
+#
+#   * It has an effect only for a URL that ``requests`` would send through a
+#     configured proxy (``HTTPS_PROXY`` and friends, honouring ``NO_PROXY``,
+#     or an explicit ``proxies=`` mapping). A direct connection keeps the
+#     full resolve-and-pin policy.
+#   * The proxy may sit on loopback, RFC 1918, or RFC 6598. It may still not
+#     be a link-local, metadata, multicast, unspecified, or reserved address,
+#     nor any name in ``_NEVER_ALLOWLISTABLE_HOSTNAMES``: the same ceiling as
+#     ``CLAUDE_SEO_LOCAL_TARGETS``.
+#   * The target hostname is not resolved locally; the proxy resolves it.
+#     Scheme, authority, hostname-blocklist, and IP-literal checks still run
+#     before anything is sent, so ``http://169.254.169.254/`` and
+#     ``http://metadata.google.internal/`` are refused exactly as before.
+#   * Private-address protection for *names* moves to the proxy. An operator
+#     who sets this flag is stating that the proxy's own policy is the
+#     boundary; that is true of the environments the flag exists for, and
+#     not of a bare ``HTTPS_PROXY`` pointing at an open relay.
+#   * Unset, claude-seo behaves exactly as it did before the flag existed.
+_TRUST_PROXY_ENV = "CLAUDE_SEO_TRUST_PROXY"
+
+# ``validate_url_strict`` returns this in place of a pinned IPv4 address when
+# the configured, trusted proxy resolves the target instead of this process.
+PROXY_RESOLVES = ""
+
+
+def _trust_proxy_enabled() -> bool:
+    """True when the operator opted into ``CLAUDE_SEO_TRUST_PROXY``."""
+    value = os.environ.get(_TRUST_PROXY_ENV, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 # Hostnames and literals no allowlist entry can ever unblock.
@@ -468,7 +524,9 @@ def validate_url_strict(url: str) -> tuple[str, str]:
     """
     Resolve and validate the URL's hostname.
 
-    Returns ``(url, pinned_ipv4)`` on success. Raises ``URLSafetyError`` if:
+    Returns ``(url, pinned_ipv4)`` on success, or ``(url, PROXY_RESOLVES)``
+    when ``CLAUDE_SEO_TRUST_PROXY`` is set and a configured proxy will
+    resolve the target. Raises ``URLSafetyError`` if:
         - Scheme is invalid or hostname is missing.
         - Hostname is hard-blocked.
         - DNS resolution fails.
@@ -508,6 +566,12 @@ def validate_url_strict(url: str) -> tuple[str, str]:
         ):
             raise URLSafetyError(f"Blocked IP literal: {hostname}")
         return url, str(literal)
+
+    # A trusted CONNECT proxy resolves the name; this process may not be able
+    # to (no resolver in the sandbox). Every check above has already run, and
+    # _assert_proxy_host_is_public still vets the proxy before any connect.
+    if _trust_proxy_enabled() and _proxy_hosts(url):
+        return url, PROXY_RESOLVES
 
     try:
         addrinfo = socket.getaddrinfo(
@@ -574,11 +638,24 @@ def _assert_proxy_host_is_public(host: str) -> str:
     Returns the normalized hostname. Raises ``URLSafetyError`` otherwise.
     """
     normalized = normalize_hostname(host)
-    hint = (
-        "Point the proxy environment variable at a publicly routable "
-        "address, or unset it."
-    )
-    if normalized in _BLOCKED_HOSTNAMES:
+    trusted = _trust_proxy_enabled()
+    # In trust mode the proxy is the operator's declared egress and may live
+    # on loopback or a private range, up to the same ceiling as
+    # CLAUDE_SEO_LOCAL_TARGETS: never link-local, metadata, or reserved.
+    accept = _is_allowlistable_ip if trusted else is_safe_ip
+    if trusted:
+        hint = (
+            f"{_TRUST_PROXY_ENV} never admits a metadata, link-local, or "
+            "reserved proxy address."
+        )
+    else:
+        hint = (
+            "Point the proxy environment variable at a publicly routable "
+            "address, or unset it."
+        )
+    if normalized in _NEVER_ALLOWLISTABLE_HOSTNAMES or (
+        not trusted and normalized in _BLOCKED_HOSTNAMES
+    ):
         raise URLSafetyError(
             f"Refusing configured HTTP proxy {host!r}: blocked hostname "
             f"{normalized}. {hint}"
@@ -590,7 +667,7 @@ def _assert_proxy_host_is_public(host: str) -> str:
         literal = None
 
     if literal is not None:
-        if not is_safe_ip(normalized):
+        if not accept(normalized):
             raise URLSafetyError(
                 f"Refusing configured HTTP proxy {host!r}: non-public "
                 f"address {normalized}. {hint}"
@@ -617,7 +694,7 @@ def _assert_proxy_host_is_public(host: str) -> str:
             f"{hint}"
         )
     for ip_str in resolved_ips:
-        if not is_safe_ip(ip_str):
+        if not accept(ip_str):
             raise URLSafetyError(
                 f"Refusing configured HTTP proxy {host!r}: it resolves to "
                 f"non-public IP {ip_str}. {hint}"
@@ -660,6 +737,12 @@ def _pin_dns(
     which ``requests`` surfaces as ``ConnectionError``: the caller's
     existing error path.
 
+    An empty ``pinned_ip`` (``PROXY_RESOLVES``) means a trusted proxy
+    resolves the target: the target then takes the fall-through path below
+    like any other name, so a lookup that does reach this process (the proxy
+    selection changed under us, or ``NO_PROXY`` matched after all) is still
+    validated rather than answered with a fabricated address.
+
     ``exempt_hosts`` are resolved by the real resolver without the
     fall-through check. It carries the configured HTTP proxy, if any: the
     proxy is the process's own egress, and requests must resolve it to open
@@ -690,7 +773,7 @@ def _pin_dns(
     def patched(host, requested_port, *args, **kwargs):
         # Branch 1: the originally-pinned host returns the validated IP
         # without any further resolver call.
-        if host and host.lower() == target:
+        if host and host.lower() == target and pinned_ip:
             family = kwargs.get("family", args[0] if args else 0)
             if family in (0, socket.AF_UNSPEC, socket.AF_INET):
                 return [(
@@ -715,9 +798,10 @@ def _pin_dns(
             try:
                 ipaddress.ip_address(host.strip("[]"))
             except ValueError:
+                accept = _is_allowlistable_ip if _trust_proxy_enabled() else is_safe_ip
                 for info in result:
                     sockaddr = info[4]
-                    if sockaddr and not is_safe_ip(sockaddr[0]):
+                    if sockaddr and not accept(sockaddr[0]):
                         raise socket.gaierror(
                             socket.EAI_FAIL,
                             f"url_safety: exempt proxy host {host} resolved to "
@@ -975,6 +1059,22 @@ def make_safe_playwright_route_handler(
                 route.abort()
                 return
 
+            # An IP literal needs no resolver and is judged on the spot, so
+            # the trusted-proxy path below cannot carry a private literal.
+            if _looks_like_ip(normalized):
+                if is_safe_ip(normalized):
+                    route.continue_()
+                else:
+                    route.abort()
+                return
+
+            # Chromium sends this request through the same configured proxy
+            # (it reads the proxy environment on Linux and the system proxy
+            # elsewhere); with CLAUDE_SEO_TRUST_PROXY the proxy resolves it.
+            if _trust_proxy_enabled() and _proxy_hosts(request.url):
+                route.continue_()
+                return
+
             # Dual-stack resolution: Chromium may use IPv6 even when a
             # host has IPv4 records. AF_UNSPEC returns both families;
             # any single non-public record aborts the request.
@@ -1049,7 +1149,12 @@ def _cli() -> None:
             sys.exit(2)
     else:
         if result["ok"] == "true":
-            extra = f" -> {result['pinned_ip']}" if result["pinned_ip"] else ""
+            if result["pinned_ip"]:
+                extra = f" -> {result['pinned_ip']}"
+            elif args.strict:
+                extra = " -> resolved by trusted proxy"
+            else:
+                extra = ""
             print(f"OK: {args.url}{extra}")
         else:
             print(f"BLOCKED: {args.url} ({result['error'] or 'parse-time reject'})")

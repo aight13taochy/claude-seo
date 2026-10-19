@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `CLAUDE_SEO_TRUST_PROXY=1`: an opt-in for sandboxes with no DNS resolver
+  that route every outbound connection through an HTTP CONNECT proxy on
+  loopback (claude.ai cloud environments, locked-down CI runners). Under the
+  default policy nothing left such a host: `validate_url_strict` failed on
+  the resolver and the loopback proxy was refused as non-public (#280). With
+  the flag, and only for a URL that `requests` would send through a
+  configured proxy, the proxy resolves the target and may sit on loopback or
+  a private range, up to the `CLAUDE_SEO_LOCAL_TARGETS` ceiling: metadata,
+  link-local, multicast and reserved proxy addresses stay refused, and the
+  scheme, hostname-blocklist and IP-literal checks still run in
+  `validate_url_strict` and in the Playwright route handler. The route
+  handler also judges IP literals without a resolver. Unset, behaviour is
+  unchanged. Documented in SECURITY.md.
+
 - ScrapeGraphAI extension (`extensions/scrapegraphai/`): installs the official
   `scrapegraph-mcp` Python server into an isolated venv, registers it in
   `~/.claude.json`, and exposes `/seo scrapegraphai` for prompt-driven
