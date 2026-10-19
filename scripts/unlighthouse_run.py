@@ -10,6 +10,8 @@ support without a paid Google Cloud bill.
 
 This wrapper:
   - Validates the target via url_safety before any subprocess starts.
+  - Pins the audited host to the validated IP in every process that can
+    reach the network (see "SSRF and DNS rebinding" below).
   - Invokes ``npx --yes unlighthouse-ci@0.13.5 …`` with sensible
     defaults (mobile form factor, JSON reporter, generated config file).
   - Captures the JSON result the CLI writes and returns it parsed,
@@ -36,6 +38,29 @@ The same generated config sets ``puppeteerClusterOptions.timeout``
 This guards against a single hung page consuming the whole crawl's
 time budget, independent of the subprocess-level ``--timeout``.
 
+SSRF and DNS rebinding
+======================
+Unlighthouse resolves DNS and follows redirects on its own, in two places
+Python's url_safety cannot reach:
+
+- **Chromium** (Puppeteer, and every Lighthouse run, which attaches to the
+  same browser through its DevTools port). The generated config passes
+  ``puppeteerOptions.args = chromium_launch_args(target, pinned_ip)``,
+  forwarded to ``puppeteer.launch()`` via puppeteer-cluster
+  (https://unlighthouse.dev/api/config#puppeteeroptions), so the audited
+  host always connects to the pre-flight IP.
+- **Node** (axios for robots.txt, sitemaps and every crawled route; got for
+  sitemaps). ``scripts/node_net_guard.cjs`` is preloaded through
+  ``NODE_OPTIONS=--require``: it pins the audited host and refuses any
+  connection to a non-public address, including redirects to IP literals
+  such as ``169.254.169.254``.
+
+Residual risk: loopback stays reachable from Node (Puppeteer and Lighthouse
+need Chromium's DevTools port on 127.0.0.1), and Chromium resolves
+third-party hosts itself with no per-request guard. With a trusted proxy
+(``CLAUDE_SEO_TRUST_PROXY``) there is no local resolver to rebind and
+neither pin is applied, as in the other browser paths.
+
 Prerequisites
 =============
 Node.js 18+ available on ``$PATH``. The first run downloads
@@ -58,15 +83,28 @@ import statistics
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
+from urllib.parse import urlparse
 
 _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from url_safety import URLSafetyError, validate_url_strict  # noqa: E402
+from url_safety import (  # noqa: E402
+    PROXY_RESOLVES,
+    URLSafetyError,
+    chromium_launch_args,
+    normalize_hostname,
+    validate_url_strict,
+)
 
 UNLIGHTHOUSE_PIN = "unlighthouse@0.13.5"
+NODE_NET_GUARD = Path(_SCRIPTS_DIR) / "node_net_guard.cjs"
+# Proxies npm (npx) may connect through; the Node guard must not block them.
+_PROXY_ENV_KEYS = (
+    "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY",
+    "all_proxy", "npm_config_proxy", "npm_config_https_proxy",
+)
 
 # Numeric metadata keys that are not per-category scores; excluded from
 # aggregate score averaging so a route's `score` (the Lighthouse overall
@@ -83,16 +121,64 @@ def _check_node() -> str | None:
     return None
 
 
-def build_config(max_routes: int | None, page_timeout_ms: int) -> dict[str, Any]:
+def build_config(
+    max_routes: int | None,
+    page_timeout_ms: int,
+    chromium_args: list[str] | None = None,
+) -> dict[str, Any]:
     """Build the object written to the generated unlighthouse config file.
 
     ``max_routes=None`` maps to ``scanner.maxRoutes: false`` (unlimited),
-    matching the documented type ``number | false``.
+    matching the documented type ``number | false``. ``chromium_args`` (from
+    ``chromium_launch_args``) go to ``puppeteerOptions.args``.
     """
-    return {
+    config: dict[str, Any] = {
         "scanner": {"maxRoutes": max_routes if max_routes is not None else False},
         "puppeteerClusterOptions": {"timeout": page_timeout_ms},
     }
+    if chromium_args:
+        config["puppeteerOptions"] = {"args": list(chromium_args)}
+    return config
+
+
+def node_require_option(path: PurePath) -> str:
+    """``--require "<path>"`` quoted the way Node parses NODE_OPTIONS.
+
+    Inside double quotes Node treats a backslash as an escape, so Windows
+    paths need their backslashes doubled; spaces stay inside the quotes.
+    """
+    escaped = str(path).replace("\\", "\\\\").replace('"', '\\"')
+    return f'--require "{escaped}"'
+
+
+def build_guard_env(target: str, pinned_ip: str, base_env: dict[str, str]) -> dict[str, str]:
+    """Environment that preloads ``node_net_guard.cjs`` into every Node process.
+
+    Returns ``base_env`` unchanged when a trusted proxy resolves the target
+    (``PROXY_RESOLVES``): there is no local resolver to rebind. The proxy
+    hosts npm may need are passed as ``CLAUDE_SEO_NET_ALLOW``.
+    """
+    env = dict(base_env)
+    if pinned_ip == PROXY_RESOLVES:
+        return env
+    host = normalize_hostname(urlparse(target).hostname or "")
+    try:
+        host = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        pass
+    allow = set()
+    for key in _PROXY_ENV_KEYS:
+        value = env.get(key) or ""
+        proxy_host = urlparse(value if "://" in value else f"http://{value}").hostname
+        if proxy_host:
+            allow.add(proxy_host.lower())
+    require = node_require_option(NODE_NET_GUARD)
+    env["NODE_OPTIONS"] = f"{env.get('NODE_OPTIONS', '')} {require}".strip()
+    env["CLAUDE_SEO_NET_GUARD"] = "1"
+    env["CLAUDE_SEO_PIN_HOST"] = host
+    env["CLAUDE_SEO_PIN_IP"] = pinned_ip
+    env["CLAUDE_SEO_NET_ALLOW"] = ",".join(sorted(allow))
+    return env
 
 
 def write_config_file(out_dir: Path, config: dict[str, Any]) -> Path:
@@ -192,7 +278,8 @@ def run(
     page_timeout: int = 60,
 ) -> dict:
     try:
-        target, _ = validate_url_strict(target)
+        target, pinned_ip = validate_url_strict(target)
+        chromium_args = chromium_launch_args(target, pinned_ip)
     except URLSafetyError as exc:
         return {"ok": False, "error": f"url_safety: {exc}"}
 
@@ -204,7 +291,7 @@ def run(
         prefix="claude-seo-unlighthouse-"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    config = build_config(max_routes, page_timeout * 1000)
+    config = build_config(max_routes, page_timeout * 1000, chromium_args)
     config_path = write_config_file(out_dir, config)
     cmd = build_cmd(target, device=device, out_dir=out_dir, config_path=config_path)
 
@@ -217,6 +304,7 @@ def run(
             errors="replace",
             timeout=timeout,
             check=False,
+            env=build_guard_env(target, pinned_ip, dict(os.environ)),
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"unlighthouse timed out after {timeout}s",
