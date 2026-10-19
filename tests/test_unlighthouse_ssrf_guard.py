@@ -51,7 +51,7 @@ def _run_captured(monkeypatch, tmp_path, pinned_ip, base_env=None):
     monkeypatch.setattr(ul, "validate_url_strict", lambda url: ("https://example.com/", pinned_ip))
     monkeypatch.setattr(ul, "_check_node", lambda: None)
     for key in list(ul.os.environ):
-        if key.startswith("CLAUDE_SEO_") or key in ul._PROXY_ENV_KEYS or key == "NODE_OPTIONS":
+        if key.startswith("CLAUDE_SEO_") or key.lower() in ul._PROXY_ENV_KEYS or key == "NODE_OPTIONS":
             monkeypatch.delenv(key, raising=False)
     for key, value in (base_env or {}).items():
         monkeypatch.setenv(key, value)
@@ -95,6 +95,15 @@ def test_existing_node_options_and_proxies_are_kept(monkeypatch, tmp_path):
     )
     assert env["NODE_OPTIONS"].startswith("--max-old-space-size=4096 --require ")
     assert env["CLAUDE_SEO_NET_ALLOW"].split(",") == ["10.1.2.3", "proxy.corp.internal"]
+
+
+def test_proxy_variables_are_found_whatever_their_case():
+    env = ul.build_guard_env("https://example.com/", "93.184.215.14", {
+        "NPM_CONFIG_PROXY": "http://upper.example:1",   # how Windows stores it
+        "https_proxy": "http://lower.example:2",
+        "UNRELATED": "http://not-a-proxy.example",
+    })
+    assert env["CLAUDE_SEO_NET_ALLOW"] == "lower.example,upper.example"
 
 
 def test_trusted_proxy_mode_applies_no_pin(monkeypatch, tmp_path):

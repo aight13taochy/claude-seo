@@ -101,10 +101,10 @@ from url_safety import (  # noqa: E402
 UNLIGHTHOUSE_PIN = "unlighthouse@0.13.5"
 NODE_NET_GUARD = Path(_SCRIPTS_DIR) / "node_net_guard.cjs"
 # Proxies npm (npx) may connect through; the Node guard must not block them.
-_PROXY_ENV_KEYS = (
-    "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY",
-    "all_proxy", "npm_config_proxy", "npm_config_https_proxy",
-)
+# Matched case-insensitively: Windows upper-cases every os.environ key.
+_PROXY_ENV_KEYS = frozenset({
+    "https_proxy", "http_proxy", "all_proxy", "npm_config_proxy", "npm_config_https_proxy",
+})
 
 # Numeric metadata keys that are not per-category scores; excluded from
 # aggregate score averaging so a route's `score` (the Lighthouse overall
@@ -167,8 +167,9 @@ def build_guard_env(target: str, pinned_ip: str, base_env: dict[str, str]) -> di
     except UnicodeError:
         pass
     allow = set()
-    for key in _PROXY_ENV_KEYS:
-        value = env.get(key) or ""
+    for key, value in env.items():
+        if key.lower() not in _PROXY_ENV_KEYS or not value:
+            continue
         proxy_host = urlparse(value if "://" in value else f"http://{value}").hostname
         if proxy_host:
             allow.add(proxy_host.lower())
