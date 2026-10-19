@@ -351,7 +351,7 @@ UCP itself is live; what's early is broad merchant adoption. Flag a literal
 | Cost check blocked | Daily budget exceeded | Inform user, offer free-only analysis |
 | Empty Shopping results | No products for keyword | Suggest broader keyword, check location settings |
 | Amazon API timeout | Network/rate limit | Retry with backoff, fall back to Google-only |
-| Invalid URL | Malformed input | Validate via `url_safety.validate_url()`, show error |
+| Invalid or non-public URL | Malformed input, private address | `render_page.py` rejects it through `url_safety.validate_url_strict()`; show its error and never bypass |
 | Non-product page | URL is category/homepage | Run the store-level checks (UCP profile, category structure, feeds) and ask for a product URL for the product-level checks |
 
 ---
