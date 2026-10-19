@@ -1,10 +1,14 @@
 # ScrapeGraphAI Setup Guide
 
-## 1. Get Your API Key
+The extension uses ScrapeGraphAI's hosted MCP server. Nothing is installed
+locally: no Python package, no virtual environment.
+
+## 1. Create an Account
 
 1. Go to [dashboard.scrapegraphai.com](https://dashboard.scrapegraphai.com)
-2. Create an account (free credits are included on sign-up)
-3. Open **API Keys** and copy your key (starts with `sgai-`)
+2. Sign up (free credits are included)
+3. Optional: open **API Keys** and create a key. It starts with `sgai-`.
+   Older `sk-...` keys are rejected by the new API.
 
 ## 2. Run the Installer
 
@@ -13,82 +17,85 @@
 .\extensions\scrapegraphai\install.ps1         # Windows PowerShell
 ```
 
-It prompts for the key, creates an isolated Python environment under
-`~/.claude/skills/seo-scrapegraphai/.venv`, installs `scrapegraph-mcp==1.0.1`
-into it, and registers the MCP server.
+It copies the skill and registers an HTTP MCP server named `sgai` in
+`~/.claude.json`. At the prompt, either paste an `sgai-` key or leave it empty.
 
-Requirements: Python 3.10+ with the `venv` module. On Debian/Ubuntu install
-`python3-venv` first.
+## 3. Sign In (Google option)
 
-## 3. Manual MCP Configuration
-
-If the installer fails, create the environment yourself:
+If you left the key empty:
 
 ```bash
-python3 -m venv ~/.claude/skills/seo-scrapegraphai/.venv
-~/.claude/skills/seo-scrapegraphai/.venv/bin/python -m pip install "scrapegraph-mcp==1.0.1"
+claude mcp login sgai
 ```
 
-Then add this to `~/.claude.json` (replace `/home/you` with your home
-directory, and `Scripts\python.exe` instead of `bin/python` on Windows):
+Choose *Continue with Google* in the browser and sign in with the account
+linked to ScrapeGraphAI. Alternatively, inside Claude Code run `/mcp`, select
+`sgai`, and pick *Authenticate*.
+
+## 4. Manual MCP Configuration
+
+If the installer fails, add this to `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
-    "scrapegraph-mcp": {
-      "command": "/home/you/.claude/skills/seo-scrapegraphai/.venv/bin/python",
-      "args": ["-c", "from scrapegraph_mcp.server import mcp; mcp.run(transport='stdio')"],
-      "env": {
-        "SGAI_API_KEY": "sgai-your-api-key-here"
-      }
+    "sgai": {
+      "type": "http",
+      "url": "https://sgai-mcp-main.onrender.com/mcp"
     }
   }
 }
 ```
 
-Why `python -c` and not the `scrapegraph-mcp` console script: the console
-script's `main()` prints a startup banner to stdout before the JSON-RPC stream
-begins, which some MCP clients reject. Calling `mcp.run()` directly keeps
-stdout clean.
+then run `claude mcp login sgai`. With an API key instead:
 
-## 4. Verify Installation
-
-Start Claude Code and try:
-
+```json
+{
+  "mcpServers": {
+    "sgai": {
+      "type": "http",
+      "url": "https://sgai-mcp-main.onrender.com/mcp",
+      "headers": { "X-API-Key": "sgai-your-api-key-here" }
+    }
+  }
+}
 ```
-/seo scrapegraphai sitemap https://example.com
-```
 
-You should get a URL list for 1 credit. If you see a "tool not available"
-error, restart Claude Code to reload MCP servers.
-
-To test the server outside Claude Code:
+Or with the CLI:
 
 ```bash
-SGAI_API_KEY=x ~/.claude/skills/seo-scrapegraphai/.venv/bin/python -c "import scrapegraph_mcp.server; print('ok')"
+claude mcp add --transport http sgai https://sgai-mcp-main.onrender.com/mcp \
+  --header "X-API-Key: $SGAI_API_KEY"
 ```
 
-## 5. Understanding Credits
+### Two pitfalls
 
-| Operation | Credits |
-|-----------|---------|
-| `markdown` (`markdownify`) | 2 per page |
-| `extract` (`smartscraper`) | 10 per page |
-| `search` (`searchscraper`) | 10 per website (default 3 websites) |
-| `crawl` markdown mode | 2 per page |
-| `crawl` AI mode | 10 per page |
-| `scrape` | 1 per page |
-| `sitemap` | 1 per request |
-| `agent` (`agentic_scrapper`) | variable |
+- **URL.** ScrapeGraphAI's docs give `https://mcp.scrapegraphai.com/mcp`, but
+  its OAuth metadata declares `https://sgai-mcp-main.onrender.com/mcp` as the
+  protected resource. Claude Code checks the two match and refuses the public
+  hostname with "Protected resource does not match". Use the onrender URL.
+- **Header.** The docs show `Authorization: Bearer sgai-...`; against this
+  server Claude Code gets `401 no token payload`. `X-API-Key` works.
 
-Figures reported by the server's `scrapegraph://api/status` resource in
-`scrapegraph-mcp` 1.0.1. Check the dashboard for current pricing.
+## 5. Verify Installation
 
-**Tip**: run `sitemap` first (1 credit) to size the site, then set
-`max_pages` on `crawl` before spending 2-10 credits per page.
+```bash
+claude mcp get sgai
+```
 
-## 6. Optional Environment Variables
+Then start Claude Code and try:
 
-The server also honors `SGAI_API_URL` (override the API base URL) and
-`SGAI_TIMEOUT` (request timeout in seconds). Add them to the `env` block of the
-MCP entry if needed.
+```
+/seo scrapegraphai credits
+```
+
+A balance confirms authentication. If you see a "tool not available" error,
+restart Claude Code to reload MCP servers.
+
+## 6. Credits
+
+Every call spends credits; the server does not publish per-tool prices.
+Run `credits` before large jobs and read a request's cost with
+`history_get` after a test call. Each tool call times out after 60 seconds;
+multi-page jobs go through `crawl_start` and page monitors through
+`monitor_create`.

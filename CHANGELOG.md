@@ -23,11 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handler also judges IP literals without a resolver. Unset, behaviour is
   unchanged. Documented in SECURITY.md.
 
-- ScrapeGraphAI extension (`extensions/scrapegraphai/`): installs the official
-  `scrapegraph-mcp` Python server into an isolated venv, registers it in
-  `~/.claude.json`, and exposes `/seo scrapegraphai` for prompt-driven
-  extraction, search, markdown conversion, async AI crawling, and agentic
-  browsing.
+- ScrapeGraphAI extension (`extensions/scrapegraphai/`): registers
+  ScrapeGraphAI's hosted MCP server as `sgai` in `~/.claude.json` and exposes
+  `/seo scrapegraphai` for prompt-driven extraction, search, markdown and
+  multi-format scraping, async crawling, and page-change monitors.
+
+### Fixed
+
+- ScrapeGraphAI extension: the PyPI package `scrapegraph-mcp` 1.0.1 it used
+  to install calls `api.scrapegraphai.com/v1`, whose TLS endpoint is dead,
+  so every tool failed. The installers no longer create a Python venv; they
+  register the hosted server (`https://sgai-mcp-main.onrender.com/mcp`, HTTP
+  transport) with an optional `sgai-` key sent as `X-API-Key`, or Google
+  sign-in through `claude mcp login sgai`. The onrender URL is deliberate:
+  the server's OAuth metadata names it as the protected resource, so Claude
+  Code refuses the public `mcp.scrapegraphai.com` hostname. SKILL.md now
+  documents the server's real tools (`scrape`, `extract`, `search`,
+  `crawl_*`, `monitor_*`, `credits`, `history_*`) instead of the retired
+  `smartscraper`/`markdownify`/`searchscraper` set; the Python 3.10
+  requirement is gone.
 
 ## [2.4.2] - 2026-10-04
 

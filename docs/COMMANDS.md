@@ -675,15 +675,16 @@ Live SEO data via DataForSEO MCP server (extension). 23 data commands across 9 A
 
 ### `/seo scrapegraphai [command] <url|query>`
 
-LLM-powered scraping and extraction via the ScrapeGraphAI MCP server (extension). **Prerequisites:** ScrapeGraphAI extension installed (`./extensions/scrapegraphai/install.sh`), Python 3.10+.
+LLM-powered scraping and extraction via ScrapeGraphAI's hosted MCP server (extension). **Prerequisites:** ScrapeGraphAI extension installed (`./extensions/scrapegraphai/install.sh`), then Google sign-in (`claude mcp login sgai`) or an `sgai-` API key. Nothing runs locally.
 ```
-/seo scrapegraphai markdown <url>                 # Clean markdown of one page (2 credits)
-/seo scrapegraphai extract <url> "<prompt>"       # Structured extraction with prompt, optional JSON schema (10 credits)
-/seo scrapegraphai search "<query>"               # Web search plus extraction from top results (10 credits/site)
-/seo scrapegraphai crawl <url> ["<prompt>"]       # Async multi-page crawl, markdown or AI mode
-/seo scrapegraphai sitemap <url>                  # URL inventory from the sitemap (1 credit)
-/seo scrapegraphai scrape <url>                   # Rendered HTML, optional heavy JS (1 credit)
-/seo scrapegraphai agent <url> "<prompt>"         # Multi-step browser automation then extraction
+/seo scrapegraphai markdown <url>                 # Clean markdown of one page (scrape)
+/seo scrapegraphai scrape <url> [format]          # html, screenshot, links, images, summary, branding, json
+/seo scrapegraphai extract <url> "<prompt>"       # Structured extraction with prompt, optional JSON schema
+/seo scrapegraphai search "<query>"               # Web search plus extraction from top results
+/seo scrapegraphai crawl <url> [mode]             # Async multi-page crawl (crawl_start + crawl_get/crawl_pages)
+/seo scrapegraphai monitor <url> [interval]       # Scheduled page-change monitor
+/seo scrapegraphai credits                        # Credit balance
+/seo scrapegraphai history [id]                   # Request history and per-call cost
 ```
 
 ---
