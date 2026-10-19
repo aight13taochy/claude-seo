@@ -197,6 +197,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be written as one resolver rule is refused before Chromium starts.
   Third-party hosts stay covered by the route handler only (SECURITY.md).
 
+- `/seo unlighthouse` no longer lets unlighthouse discover routes. Its
+  crawler queued any link whose text contained the site URL, such as
+  `https://site@10.0.0.1/`, and any subdomain, and Lighthouse loaded them in
+  Chromium, which pins only the audited host and has no per-request guard.
+  `scripts/unlighthouse_run.py` now builds the URL list itself from the
+  site's sitemaps (or the target page's links) through `url_safety`, keeps
+  only the target's exact scheme, host and port, and passes it as the
+  config's `urls`, which turns off unlighthouse's sitemap, robots.txt and
+  crawler discovery. Pages reachable only by deeper crawling, and
+  subdomains, are no longer scanned. Each result carries the remaining
+  redirect and loopback risk in `warnings`, also printed to stderr.
+
 ## [2.4.2] - 2026-10-04
 
 seo-cockpit, Google sign-in through your own account, and a schema-hook fix.

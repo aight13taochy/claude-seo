@@ -49,6 +49,22 @@ unlighthouse-ci has no `--max-routes` flag). Use `--page-timeout <seconds>` to
 change the per-page Lighthouse task timeout (default 60s); this is separate
 from the overall `--timeout` subprocess guard (default 600s).
 
+## Route discovery and SSRF bounds
+
+Unlighthouse's own discovery is switched off. The wrapper reads the site's
+sitemaps (robots.txt `Sitemap:` lines and `/sitemap.xml`, index children
+included) through url_safety, or the target page's links when no sitemap lists
+a page, and passes only URLs with the target's exact scheme, host and port.
+Subdomains and pages reachable only by crawling deeper are not scanned, so pass
+the canonical origin (for example `https://www.example.com/` when the apex
+redirects there): URLs on the redirect target's host are dropped.
+`scanned_urls` reports how many URLs were handed over.
+
+The audited host is DNS-pinned for unlighthouse's Chromium and its Node
+fetches, and Node refuses non-public addresses other than loopback. Chromium
+cannot re-validate a redirect to another host or a private IP, so every result
+carries that warning in `warnings`: only audit sites you trust. See SECURITY.md.
+
 ## Cross-skill delegation
 
 - For single-URL field data (CrUX), use `seo-google psi` / `seo-google crux`.
