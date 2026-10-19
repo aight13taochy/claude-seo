@@ -105,6 +105,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 from url_safety import (  # noqa: E402  (sys.path massage above is intentional)
     URLSafetyError,
+    chromium_launch_args,
     decode_response_text,
     make_safe_playwright_route_handler,
     safe_requests_get,
@@ -450,7 +451,7 @@ def render_page(
 
     # Pre-flight SSRF check.
     try:
-        norm_url, _pinned_ip = validate_url_strict(url)
+        norm_url, pinned_ip = validate_url_strict(url)
         result["url"] = norm_url
     except URLSafetyError as exc:
         result["error"] = f"url_safety: {exc}"
@@ -500,6 +501,15 @@ def render_page(
             _keep_raw_on_render_failure()
             return result
 
+        # Pin the audited host to the pre-flight IP inside Chromium's own
+        # resolver. A host that cannot be pinned is not rendered at all.
+        try:
+            chromium_args = chromium_launch_args(norm_url, pinned_ip)
+        except URLSafetyError as exc:
+            result["error"] = f"url_safety: {exc}"
+            _keep_raw_on_render_failure()
+            return result
+
         vp = VIEWPORTS[viewport]
         blocked = set(block_resources or [])
         route_handler = make_safe_playwright_route_handler(blocked)
@@ -507,7 +517,7 @@ def render_page(
 
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(headless=True, args=chromium_args)
                 context = browser.new_context(
                     viewport={"width": vp["width"], "height": vp["height"]},
                     device_scale_factor=vp["device_scale"],

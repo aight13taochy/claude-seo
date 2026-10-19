@@ -33,11 +33,13 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from google_auth import get_oauth_credentials, validate_url
+    from google_auth import get_oauth_credentials
+    from url_safety import validate_url
 except ImportError:
     import os
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from google_auth import get_oauth_credentials, validate_url
+    from google_auth import get_oauth_credentials
+    from url_safety import validate_url
 
 INDEXING_SCOPES = ["https://www.googleapis.com/auth/indexing"]
 DAILY_QUOTA = 200

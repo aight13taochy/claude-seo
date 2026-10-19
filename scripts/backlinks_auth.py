@@ -22,7 +22,8 @@ import sys
 from typing import Optional
 
 # Import SSRF protection from the canonical url_safety module.
-# google_auth.validate_url is a back-compat wrapper around the same function.
+# google_auth.validate_url is a deprecated alias of url_safety.validate_url;
+# import from url_safety directly.
 _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)

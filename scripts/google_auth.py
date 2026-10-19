@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import time
+import warnings
 from typing import Optional
 
 CONFIG_PATH = os.path.expanduser("~/.config/claude-seo/google-api.json")
@@ -542,20 +543,25 @@ def _exchange_code(client: dict, code: str, creds_path: Optional[str] = None):
 
 def validate_url(url: str) -> bool:
     """
-    Validate a URL for use with Google APIs. Rejects private/loopback addresses.
+    Deprecated alias of :func:`url_safety.validate_url`. Do not use.
 
-    Args:
-        url: URL string to validate.
+    google_auth.py handles credentials only; it is not an SSRF guard. This
+    alias survives so third-party callers written against v1 keep working,
+    and warns so they move. Repository code imports from url_safety, and a
+    test enforces that.
 
-    Returns:
-        True if the URL is a valid public http/https URL, False otherwise.
-
-    Note:
-        Back-compat wrapper around :func:`url_safety.validate_url`. The shared
-        module is the canonical implementation and adds DNS-rebinding-safe
-        helpers (``validate_url_strict``, ``safe_requests_get``) that
-        ``fetch_page.py`` and ``render_page.py`` use before opening sockets.
+    Use instead:
+        - ``url_safety.validate_url_strict()`` plus the ``safe_requests_*``
+          helpers whenever this process opens a socket to the URL.
+        - ``url_safety.validate_url()`` only for a URL handed to a third-party
+          API that fetches it (PageSpeed Insights, CrUX, Search Console).
     """
+    warnings.warn(
+        "google_auth.validate_url is deprecated and is not an SSRF guard; "
+        "import validate_url or validate_url_strict from url_safety instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Lazy import: avoids a hard requirement on url_safety for callers that
     # only need google_auth's other helpers (e.g. token refresh) and keeps
     # the import graph one-directional.

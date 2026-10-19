@@ -29,9 +29,9 @@ _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPTS_DIR)
 try:
     from backlinks_auth import get_bing_api_key, get_bing_verified_sites
-    from google_auth import validate_url
+    from url_safety import validate_url
 except ImportError:
-    print("Error: backlinks_auth.py and google_auth.py required in scripts/", file=sys.stderr)
+    print("Error: backlinks_auth.py and url_safety.py required in scripts/", file=sys.stderr)
     sys.exit(1)
 
 BING_API_BASE = "https://ssl.bing.com/webmaster/api.svc/json"

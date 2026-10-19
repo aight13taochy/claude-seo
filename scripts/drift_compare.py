@@ -33,7 +33,7 @@ from drift_baseline import (  # noqa: E402
     normalize_url,
     url_hash,
 )
-from google_auth import validate_url  # noqa: E402
+from url_safety import validate_url  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Baseline loading

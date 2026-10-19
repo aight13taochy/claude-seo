@@ -177,7 +177,7 @@ extensions/                # 10 MCP extensions: DataForSEO, Firecrawl, ScrapeGra
 
 1. **Progressive Disclosure**: Read SKILL.md for routing, load references on demand
 2. **Industry Detection**: Auto-detect SaaS, e-commerce, local, publisher, agency
-3. **Security**: All scripts call `validate_url()` for SSRF protection
+3. **Security**: All URL handling goes through `scripts/url_safety.py`: `validate_url_strict()` plus the `safe_requests_*` helpers before any fetch, `validate_url()` only for URLs handed to a third-party API
 4. **Config location**: `~/.config/claude-seo/` for API credentials
 
 ## Credits

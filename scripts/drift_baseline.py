@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
-from google_auth import validate_url  # noqa: E402
+from url_safety import validate_url  # noqa: E402
 
 DB_DIR = os.path.expanduser("~/.cache/claude-seo/drift")
 DB_PATH = os.path.join(DB_DIR, "baselines.db")
