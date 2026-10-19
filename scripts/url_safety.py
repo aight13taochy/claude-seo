@@ -95,10 +95,13 @@ Python layer. Those scripts must:
      ``top_level_url=`` the validated URL, that re-validates each
      resolved request IP and aborts subresource fetches to private
      ranges, AND
-  4. Register ``page.on("request", handler.watch_request)`` and call
+  4. Call ``handler.guard_browser(browser)`` right after launch.
+     Playwright never routes a 30x hop; this intercepts every request,
+     hops included, at the DevTools ``Fetch`` layer and fails a refused
+     one before it is sent, AND
+  5. Register ``page.on("request", handler.watch_request)`` and call
      ``handler.check_redirects()`` before using anything the page
-     produced. Playwright never routes a 30x hop; this refuses the
-     render when a hop went somewhere the handler would have refused.
+     produced, as a second check on the same hops.
 
 The residual DNS-rebinding risk for browser-based fetches (hosts other
 than the audited one) is documented in SECURITY.md.
@@ -1071,9 +1074,12 @@ class _SafeRouteHandler:
 
     ``handler(route, request)`` is the ``page.route()`` callback. Playwright
     calls it for the first URL of a request only, never for the hops of a
-    30x redirect, so :meth:`watch_request` (a ``page.on("request")``
-    listener) judges those hops by the same rule and
-    :meth:`check_redirects` refuses the render after the fact.
+    30x redirect. :meth:`guard_browser` closes that gap before anything is
+    sent: it intercepts every request Chromium issues, hops included, at the
+    DevTools ``Fetch`` layer and fails the ones this rule refuses.
+    :meth:`watch_request` (a ``page.on("request")`` listener) and
+    :meth:`check_redirects` stay as a second check that refuses the render
+    if a refused hop is ever seen anyway.
     """
 
     def __init__(
@@ -1084,6 +1090,10 @@ class _SafeRouteHandler:
         self._blocked = set(blocked_resource_types or ())
         self._local_origin = local_origin
         self.redirect_violations: list[str] = []
+        # URLs guard_browser failed before Chromium sent them. A hop listed
+        # here never left the browser, so it is an aborted subresource, not
+        # a reason to refuse the render.
+        self._guard_blocked: set[str] = set()
 
     def __call__(self, route, request) -> None:  # type: ignore[no-untyped-def]
         try:
@@ -1100,12 +1110,60 @@ class _SafeRouteHandler:
             except Exception:
                 pass
 
+    def guard_browser(self, browser) -> None:  # type: ignore[no-untyped-def]
+        """Judge every request ``browser`` issues before Chromium sends it.
+
+        Opens a browser-level DevTools session and enables ``Fetch``
+        interception for all URLs, so pages, iframes in any process, workers,
+        and every hop of a 30x chain pause until this rule answers. A refused
+        request fails with ``BlockedByClient``; so does one whose judgement
+        raises. Call it right after ``chromium.launch()`` and before any page
+        exists.
+
+        Raises ``URLSafetyError`` when the interception cannot be enabled, so
+        a caller never renders unguarded.
+        """
+        try:
+            session = browser.new_browser_cdp_session()
+        except Exception as exc:
+            raise URLSafetyError(f"Cannot guard browser requests: {exc}") from exc
+
+        def on_paused(event) -> None:  # type: ignore[no-untyped-def]
+            request_id = event.get("requestId")
+            url = None
+            try:
+                url = event["request"]["url"]
+                allowed = self._allows(url)
+            except Exception:  # fail-closed
+                allowed = False
+            try:
+                if allowed:
+                    session.send("Fetch.continueRequest", {"requestId": request_id})
+                else:
+                    if url:
+                        self._guard_blocked.add(url)
+                    session.send(
+                        "Fetch.failRequest",
+                        {"requestId": request_id, "errorReason": "BlockedByClient"},
+                    )
+            except Exception:  # pragma: no cover - browser closing
+                pass
+
+        session.on("Fetch.requestPaused", on_paused)
+        try:
+            session.send(
+                "Fetch.enable",
+                {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+            )
+        except Exception as exc:
+            raise URLSafetyError(f"Cannot guard browser requests: {exc}") from exc
+
     def watch_request(self, request) -> None:  # type: ignore[no-untyped-def]
         """Record a redirect hop the route callback never saw, if refused.
 
-        Chromium has already sent that request by the time it is reported;
-        what this prevents is the render's output (content, screenshot,
-        measurements) reaching the caller.
+        :meth:`guard_browser` already fails such a hop before it is sent;
+        this is the second check, so the render's output (content,
+        screenshot, measurements) never reaches the caller if one gets past.
         """
         url = "<unreadable redirect target>"
         try:
@@ -1119,11 +1177,15 @@ class _SafeRouteHandler:
         self.redirect_violations.append(url)
 
     def check_redirects(self) -> None:
-        """Raise ``URLSafetyError`` if the browser followed a refused redirect."""
-        if self.redirect_violations:
+        """Raise ``URLSafetyError`` if the browser followed a refused redirect.
+
+        A hop :meth:`guard_browser` failed before sending is not counted: it
+        never reached its target.
+        """
+        followed = [u for u in self.redirect_violations if u not in self._guard_blocked]
+        if followed:
             raise URLSafetyError(
-                "Browser followed a redirect to a refused target: "
-                f"{self.redirect_violations[0]}"
+                f"Browser followed a redirect to a refused target: {followed[0]}"
             )
 
     def _allows(self, url: str) -> bool:
@@ -1198,10 +1260,12 @@ def make_safe_playwright_route_handler(
     :func:`validate_url_strict`.
 
     Playwright does not call a route handler for redirect hops. Callers
-    therefore also register ``page.on("request", handler.watch_request)``
-    and call ``handler.check_redirects()`` before using anything the page
-    produced; it raises ``URLSafetyError`` when a hop went somewhere the
-    handler would have refused.
+    therefore also call ``handler.guard_browser(browser)`` right after
+    launch, which fails a refused hop before Chromium sends it, register
+    ``page.on("request", handler.watch_request)``, and call
+    ``handler.check_redirects()`` before using anything the page produced;
+    it raises ``URLSafetyError`` when a hop went somewhere the handler would
+    have refused.
 
     Args:
         blocked_resource_types: optional set of Playwright resource type

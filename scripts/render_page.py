@@ -518,6 +518,7 @@ def render_page(
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True, args=chromium_args)
+                route_handler.guard_browser(browser)
                 context = browser.new_context(
                     viewport={"width": vp["width"], "height": vp["height"]},
                     device_scale_factor=vp["device_scale"],

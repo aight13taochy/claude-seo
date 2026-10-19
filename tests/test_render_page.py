@@ -354,15 +354,20 @@ class _FakePlaywrightManager:
                     }
                 return {}
 
+            def on(self, *_args):
+                return None
+
             def detach(self):
                 return None
 
+        self.browser_session = _Session()
         context = SimpleNamespace(
             new_page=lambda: page,
             new_cdp_session=lambda _page: _Session(),
         )
         browser = SimpleNamespace(
             new_context=lambda **_kwargs: context,
+            new_browser_cdp_session=lambda: self.browser_session,
             close=lambda: None,
         )
         self.playwright = SimpleNamespace(
@@ -376,11 +381,12 @@ class _FakePlaywrightManager:
         return False
 
 
-def _render_with_fake_browser(page, *, extract_accessibility=False):
+def _render_with_fake_browser(page, *, extract_accessibility=False, manager=None):
     spa_html = '<html><body><div id="root"></div></body></html>'
+    manager = manager or _FakePlaywrightManager(page)
     with patch.object(render_page, "validate_url_strict", side_effect=_mock_validate_strict), \
          patch.object(render_page, "safe_requests_get", return_value=_fake_response(spa_html)), \
-         patch.object(render_page, "sync_playwright", lambda: _FakePlaywrightManager(page)):
+         patch.object(render_page, "sync_playwright", lambda: manager):
         return render_page.render_page(
             "https://app.example/",
             mode="auto",
@@ -455,6 +461,14 @@ class _RedirectingBrowserPage(_FakeBrowserPage):
             callback(first)
             callback(hop)
         return super().goto(url, **kwargs)
+
+
+def test_render_guards_the_browser_before_any_page_exists() -> None:
+    page = _FakeBrowserPage([(200, 20), (200, 20), (200, 20)])
+    manager = _FakePlaywrightManager(page)
+    result = _render_with_fake_browser(page, manager=manager)
+    assert result["error"] is None
+    assert manager.browser_session.commands[0][0] == "Fetch.enable"
 
 
 def test_render_discards_a_page_reached_through_a_refused_redirect() -> None:
