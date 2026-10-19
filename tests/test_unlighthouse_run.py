@@ -24,7 +24,6 @@ no subprocess execution.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -170,49 +169,17 @@ def test_installer_detects_plugin_install_paths():
 
 
 # --------------------------------------------------------------------------
-# (d) SSRF bounds: DNS pin for Chromium and Node, no unlighthouse discovery
+# (d) Route discovery stays on the audited origin
 # --------------------------------------------------------------------------
 
-import shutil  # noqa: E402
 import subprocess  # noqa: E402
-
-from url_safety import PROXY_RESOLVES  # noqa: E402
 
 PIN_RULE = "--host-resolver-rules=MAP example.com 93.184.216.34"
 
 
-def test_pin_resolution_builds_chromium_rule_and_node_env():
-    args, env = ul.pin_resolution("https://Example.COM./", "93.184.216.34")
-    assert args == [PIN_RULE]
-    assert env == {"CLAUDE_SEO_PIN_HOST": "example.com", "CLAUDE_SEO_PIN_IP": "93.184.216.34"}
-
-
-@pytest.mark.parametrize(
-    ("url", "pinned_ip"),
-    [("http://93.184.216.34/", "93.184.216.34"), ("https://example.com/", PROXY_RESOLVES)],
-)
-def test_pin_resolution_has_nothing_to_pin(url, pinned_ip):
-    assert ul.pin_resolution(url, pinned_ip) == ([], {})
-
-
-def test_build_env_preloads_the_node_pin_and_keeps_existing_options():
-    pin_env = {"CLAUDE_SEO_PIN_HOST": "example.com", "CLAUDE_SEO_PIN_IP": "93.184.216.34"}
-    env = ul.build_env(pin_env, base={"NODE_OPTIONS": "--max-old-space-size=4096", "PATH": "/bin"})
-    assert env["NODE_OPTIONS"].startswith("--max-old-space-size=4096 --require \"")
-    assert env["NODE_OPTIONS"].endswith('node_dns_pin.cjs"')
-    assert env["CLAUDE_SEO_PIN_HOST"] == "example.com"
-    assert env["CLAUDE_SEO_PIN_IP"] == "93.184.216.34"
-    assert env["PATH"] == "/bin"
-    assert Path(ul.NODE_DNS_PIN).is_file()
-
-
-def test_build_env_without_pin_leaves_node_options_alone():
-    assert ul.build_env({}, base={"PATH": "/bin"}) == {"PATH": "/bin"}
-
-
-def test_build_config_carries_urls_and_chromium_pin():
+def test_build_config_carries_the_url_list():
     config = ul.build_config(
-        10, 60_000, urls=["https://example.com/", "https://example.com/a"], chromium_args=[PIN_RULE],
+        10, 60_000, [PIN_RULE], urls=["https://example.com/", "https://example.com/a"],
     )
     assert config["urls"] == ["https://example.com/", "https://example.com/a"]
     assert config["puppeteerOptions"] == {"args": [PIN_RULE]}
@@ -234,21 +201,15 @@ def _mock_run_env(monkeypatch, pinned_ip="93.184.216.34"):
     return calls
 
 
-def test_run_pins_chromium_and_node_and_hands_over_the_url_list(monkeypatch, tmp_path):
+def test_run_hands_unlighthouse_the_url_list_and_reports_the_residual_risk(monkeypatch, tmp_path):
     calls = _mock_run_env(monkeypatch)
     result = ul.run("https://example.com/", output_dir=str(tmp_path), max_routes=5)
 
     assert len(calls) == 1
-    cmd, kwargs = calls[0]
-    assert "npx" == cmd[0]
     config_text = (tmp_path / "unlighthouse.config.mjs").read_text(encoding="utf-8")
     config = json.loads(config_text.removeprefix("export default ").strip())
-    assert config["puppeteerOptions"]["args"] == [PIN_RULE]
     assert config["urls"] == ["https://example.com/", "https://example.com/a"]
-    env = kwargs["env"]
-    assert env["CLAUDE_SEO_PIN_HOST"] == "example.com"
-    assert env["CLAUDE_SEO_PIN_IP"] == "93.184.216.34"
-    assert "node_dns_pin.cjs" in env["NODE_OPTIONS"]
+    assert config["puppeteerOptions"]["args"] == [PIN_RULE]
     assert result["ok"] is True
     assert result["scanned_urls"] == 2
     assert result["warnings"] == [ul.RESIDUAL_RISK_WARNING]
@@ -340,33 +301,3 @@ def test_discover_routes_rejects_doctype_sitemaps(monkeypatch):
     }
     monkeypatch.setattr(ul, "_bounded_fetch", _fake_fetch(pages, []))
     assert ul.discover_routes("https://example.com/", max_routes=None) == ["https://example.com/"]
-
-
-_NODE_PIN_PROBE = r"""
-const http = require("http");
-const srv = http.createServer((req, res) => res.end("pinned")).listen(0, "127.0.0.1", () => {
-  const port = srv.address().port;
-  http.get(`http://rebind.invalid:${port}/`, (res) => {
-    let body = ""; res.on("data", (c) => body += c);
-    res.on("end", () => { console.log(body); srv.close(); });
-  }).on("error", (e) => { console.log("ERR " + e.code); srv.close(); });
-});
-"""
-
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
-@pytest.mark.parametrize(("pinned", "expected"), [(True, "pinned"), (False, "ERR ")])
-def test_node_preload_pins_the_audited_host(pinned, expected):
-    pin_env = {"CLAUDE_SEO_PIN_HOST": "rebind.invalid", "CLAUDE_SEO_PIN_IP": "127.0.0.1"}
-    # Keep the real environment: Node on Windows aborts at start-up without
-    # SYSTEMROOT. Drop only what would make the probe not test our preload.
-    base = {
-        k: v for k, v in os.environ.items()
-        if k not in ("NODE_OPTIONS", "CLAUDE_SEO_PIN_HOST", "CLAUDE_SEO_PIN_IP")
-    }
-    env = ul.build_env(pin_env if pinned else {}, base=base)
-    proc = subprocess.run(
-        ["node", "-e", _NODE_PIN_PROBE], env=env, capture_output=True, text=True, timeout=30,
-    )
-    # Unpinned, the .invalid name fails: ENOTFOUND, or EAI_AGAIN without DNS.
-    assert proc.stdout.strip().startswith(expected), proc.stderr

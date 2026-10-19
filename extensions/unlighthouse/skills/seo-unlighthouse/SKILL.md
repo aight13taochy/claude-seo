@@ -61,9 +61,9 @@ redirects there): URLs on the redirect target's host are dropped.
 `scanned_urls` reports how many URLs were handed over.
 
 The audited host is DNS-pinned for unlighthouse's Chromium and its Node
-fetches. Neither can re-validate a redirect to another host or a private IP,
-so every result carries that warning in `warnings`: only audit sites you trust.
-See SECURITY.md.
+fetches, and Node refuses non-public addresses other than loopback. Chromium
+cannot re-validate a redirect to another host or a private IP, so every result
+carries that warning in `warnings`: only audit sites you trust. See SECURITY.md.
 
 ## Cross-skill delegation
 

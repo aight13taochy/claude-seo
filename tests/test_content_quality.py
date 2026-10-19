@@ -109,6 +109,36 @@ def test_content_quality_detects_known_ai_patterns(phrase: str) -> None:
     assert result["ai_pattern_score"] > 0
     assert phrase.lower() in [m.lower() for m in result["matches"]["ai_patterns"]]
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # Contraction written out: the list holds "it's important to note that".
+        ("It is important to note that rankings vary.", "it's important to note that"),
+        # Typographic apostrophe pasted from a word processor.
+        ("It\u2019s important to note that rankings vary.", "it's important to note that"),
+        # A line break inside the phrase.
+        ("It's important to\nnote that rankings vary.", "it's important to note that"),
+        # An "in today's" variant that no fixed entry covered.
+        ("In today's fast-paced digital landscape, SEO matters.",
+         "in today's fast-paced digital landscape"),
+    ],
+)
+def test_content_quality_filler_survives_formatting_variants(text: str, expected: str) -> None:
+    result = content_quality.analyse(text * 20)
+    assert expected in result["matches"]["filler"], result["matches"]
+
+
+@pytest.mark.parametrize("text", ["We are delving into it.", "She delved deeper into it."])
+def test_content_quality_detects_delve_inflections(text: str) -> None:
+    result = content_quality.analyse(text * 20)
+    assert result["matches"]["ai_patterns"], result["matches"]
+
+
+def test_content_quality_in_today_family_does_not_fire_on_plain_dates() -> None:
+    result = content_quality.analyse("In today's meeting we reviewed the 2025 budget. " * 20)
+    assert result["matches"]["filler"] == []
+
+
 def test_content_quality_tokenises_korean() -> None:
     """Hangul is space-delimited, so a run of syllables is one token.
 
@@ -304,6 +334,76 @@ def test_verify_accepts_footnote_marker() -> None:
     text = "Adoption hit 60% in 2025 [^1]."
     result = content_verify.verify(text)
     assert all(c["has_citation"] for c in result["claims"])
+
+
+def test_verify_bare_percentage_is_a_claim() -> None:
+    """A trailing \\b after "%" never matched before a space or period."""
+    result = content_verify.verify("Costs rose 40% per year. Churn fell to 5%.")
+    assert [c["text"] for c in result["claims"]] == ["40%", "5%"]
+
+
+def test_verify_sentence_initial_keywords_are_claims() -> None:
+    result = content_verify.verify(
+        "In 2025, adoption doubled. According to a Stanford study, it works."
+    )
+    kinds = sorted(c["kind"] for c in result["claims"])
+    assert kinds == ["authority", "temporal"], result["claims"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Costs rose 40% per year.",  # "per" + lowercase is not "per Gartner"
+        "According to a survey, 47% of buyers churn.",  # no named source
+    ],
+)
+def test_verify_lowercase_attribution_is_not_a_citation(text: str) -> None:
+    result = content_verify.verify(text)
+    assert result["claim_count"] >= 1
+    assert result["uncited_count"] == result["claim_count"], result["claims"]
+
+
+def test_verify_named_attribution_is_a_citation() -> None:
+    for text in ("Per Gartner, 47% of buyers churn.",
+                 "According to the Pew Research Center, 60% agree."):
+        result = content_verify.verify(text)
+        assert result["claim_count"] == 1 and result["uncited_count"] == 0, (text, result)
+
+
+def test_verify_citation_does_not_cover_other_sentences() -> None:
+    """A footnote two sentences later used to cite every claim within 200 chars."""
+    text = "47% of marketers saw gains. Adoption doubled in 2024. Gartner expects 25% growth [1]."
+    by_text = {c["text"]: c["has_citation"] for c in content_verify.verify(text)["claims"]}
+    assert by_text["25%"] is True
+    assert by_text["in 2024"] is False
+    assert not any(v for k, v in by_text.items() if k.startswith("47%"))
+
+
+def test_verify_source_line_after_claim_counts() -> None:
+    result = content_verify.verify("47% of buyers churn.\nSource: Gartner 2025")
+    assert result["claim_count"] == 1 and result["uncited_count"] == 0, result
+
+
+def test_verify_next_sentence_needs_a_source_label() -> None:
+    """Only a labelled line ("Source: ...") cites the sentence before it."""
+    result = content_verify.verify("47% of buyers churn. Via the app, users pay.")
+    assert result["uncited_count"] == 1, result
+
+
+def test_verify_footnote_after_period_stays_with_its_sentence() -> None:
+    result = content_verify.verify("Growth hit 30%. [1]\n\n[1]: https://example.com/report")
+    assert result["claim_count"] == 1 and result["uncited_count"] == 0, result
+
+
+def test_verify_list_items_are_separate_sentences() -> None:
+    result = content_verify.verify("- 47% of X\n- 60% of Y [1]")
+    cited = {c["text"]: c["has_citation"] for c in result["claims"]}
+    assert cited == {"47% of X": False, "60% of Y": True}
+
+
+def test_verify_hard_wrapped_sentence_keeps_its_citation() -> None:
+    result = content_verify.verify("Usage grew 50% in the\nlast quarter [^2].")
+    assert result["uncited_count"] == 0, result
 
 
 def test_verify_empty_text_returns_zero_claims() -> None:

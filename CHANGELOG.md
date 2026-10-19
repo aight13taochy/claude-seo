@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_url` from `google_auth`, or launches Chromium without the
   resolver pin.
 
+- `scripts/audit_score.py`: recomputes the SEO Health Score from the
+  category scores in `audit-data.json`. The full audit used to ask the model
+  to aggregate the score itself, and `google_report.py` printed whatever
+  number it wrote, so an arithmetic slip reached the PDF title page. The
+  script now owns the seven category weights (the SKILL.md tables restate
+  them, and a test keeps them in step). It rescales the weights when a
+  category could not be scored and reports that `coverage`, and lists
+  unweighted categories such as Backlink Profile, which never moved the
+  score. `seo-audit` step 5 runs it with `--write`. `google_report.py --type
+  full` fills a missing headline from the categories, and warns on stderr
+  when the declared score is more than 2 points off, without rewriting it.
+
 ### Changed
 
 - One URL-safety rule across CONTRIBUTING.md, CLAUDE.md, AGENTS.md,
@@ -55,6 +67,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   import for a contributor. Kept as an alias for third-party callers.
 
 ### Fixed
+
+- Windows ledger lock in `scripts/dataforseo_costs.py` and
+  `extensions/banana/scripts/cost_tracker.py`: `msvcrt.LK_LOCK` gives up
+  after 10 one-second retries and raises `OSError`, so under contention a
+  concurrent writer could crash instead of waiting (seen as an intermittent
+  `test_banana_cost_tracker.py` failure on the Windows runner). The lock now
+  polls `LK_NBLCK` every 50-100 ms for up to `LOCK_TIMEOUT_SECONDS` (60 s)
+  and then raises `LedgerError` with a clear message. The POSIX `fcntl` path
+  is unchanged.
 
 - Windows installer smoke workflow on forks and mirrors: on a pull request
   it checked the head branch against, and `install.ps1` cloned from, the
@@ -84,11 +105,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   though `content_verify.py` names that workflow and the hreflang
   machine-translation reference already deferred to `seo-content` for it. The
   skill and the `seo-content` agent document both commands, their exit codes,
-  and their limits (English-only phrase lists, a citation window that accepts
-  any nearby link), and the skill's output template gains an Automated Signals
-  table.
+  and their limits (English-only phrase lists, and a citation check that does
+  not verify the source supports the claim), and the skill's output template
+  gains an Automated Signals table.
+- `content_quality.py` missed filler and AI phrasing that differed from its
+  lists in form only. Matching now ignores case, typographic apostrophes,
+  line breaks, and contractions ("it is important to note that" matches the
+  listed "it's important to note that"), and two families replace fixed
+  entries: "in today's <adjectives> world/landscape/age/..." and every
+  inflection of "delve (deeper) into". No new phrases were added to the lists.
+- `content_verify.py` over-counted citations and under-counted claims:
+  - A blanket case-insensitive flag turned the proper-noun check after
+    "per"/"according to" into "any letter", so "per day" and "according to a"
+    counted as sources. The name must now be capitalised.
+  - A citation within 200 characters covered every nearby claim, so one
+    footnote cited the two sentences before it. A citation now counts only in
+    the claim's own sentence, or in a "Source:" line right after it.
+  - A bare percentage ("rose 40% per year.") was never a claim, because a
+    trailing `\b` cannot follow "%", and a sentence-initial "In 2025," or
+    "According to ... study" was missed because the keywords were
+    lower-case only.
+
+- `hooks/run-python-hook.js` handed the hook to the next Python candidate on
+  any spawn error, even after the chosen interpreter had passed its probe. A
+  hook could then run under an interpreter that was never selected, or run a
+  second time, and the launcher could still exit 1 instead of the hook's own
+  code. Only `ENOENT` (the interpreter vanished) now falls through; any other
+  spawn error stops with a message naming the interpreter. The intermittent
+  Windows CI timeout in `test_hook_launcher_preserves_blocking_exit_code_two`
+  had that signature (Node exited 1, not 2); this fix is not yet confirmed to
+  end it.
 
 ### Security
+
+- `/seo unlighthouse` no longer reaches private addresses through
+  unlighthouse's own DNS and redirects. `scripts/unlighthouse_run.py` used
+  to validate the target and then discard the pinned IP: unlighthouse's
+  Chromium re-resolved the host (DNS rebinding), and its Node crawler (axios)
+  followed any redirect, including to `http://169.254.169.254/`, and kept
+  the response HTML in the report. The generated config now passes
+  `chromium_launch_args()` as `puppeteerOptions.args`, and the new
+  `scripts/node_net_guard.cjs`, preloaded with `NODE_OPTIONS=--require`,
+  pins the audited host in every Node process and refuses connections to
+  non-public addresses. Loopback stays reachable from Node (Chromium's
+  DevTools port) and Chromium's third-party requests are unchecked; both are
+  documented in SECURITY.md. Verified end to end against unlighthouse 0.13.5
+  with a page redirecting to the metadata address.
 
 - Chromium is launched with `--host-resolver-rules` mapping the audited host
   to the IP `validate_url_strict()` validated (`render_page.py`,
@@ -98,21 +160,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be written as one resolver rule is refused before Chromium starts.
   Third-party hosts stay covered by the route handler only (SECURITY.md).
 
-- `unlighthouse_run.py` no longer lets unlighthouse resolve or discover hosts
-  on its own. It validated the target, then discarded the pinned IP, so
-  unlighthouse's Chromium and its Node (axios) fetches resolved the host again
-  and a DNS-rebinding answer could point them at an internal address; its
-  crawler also followed links such as `https://site@10.0.0.1/` and any
-  subdomain. Chromium now gets the `chromium_launch_args()` pin through the
-  generated config's `puppeteerOptions.args`; every Node process of the run
-  preloads the new `scripts/node_dns_pin.cjs`, which pins the same host in
-  `dns.lookup`; and the wrapper passes a `urls` list, built from the site's
-  sitemaps (or the target page's links) through `url_safety` and limited to
-  the target's exact origin, which turns off unlighthouse's own sitemap,
-  robots.txt and crawler discovery. Pages reachable only by deeper crawling
-  and subdomains are no longer scanned. Redirects inside unlighthouse are
-  still not re-validated: each result carries that in `warnings`, and
-  SECURITY.md lists it as a residual risk.
+- `/seo unlighthouse` no longer lets unlighthouse discover routes. Its
+  crawler queued any link whose text contained the site URL, such as
+  `https://site@10.0.0.1/`, and any subdomain, and Lighthouse loaded them in
+  Chromium, which pins only the audited host and has no per-request guard.
+  `scripts/unlighthouse_run.py` now builds the URL list itself from the
+  site's sitemaps (or the target page's links) through `url_safety`, keeps
+  only the target's exact scheme, host and port, and passes it as the
+  config's `urls`, which turns off unlighthouse's sitemap, robots.txt and
+  crawler discovery. Pages reachable only by deeper crawling, and
+  subdomains, are no longer scanned. Each result carries the remaining
+  redirect and loopback risk in `warnings`, also printed to stderr.
 
 ## [2.4.2] - 2026-10-04
 

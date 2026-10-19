@@ -164,10 +164,11 @@ Both scripts exit 1 when the text crosses their `--threshold` (quality below
 either way.
 
 Scope honesty: both are deterministic heuristics with known false negatives.
-The phrase lists are English-only and incomplete, and any link, footnote, or
-"according to" within 200 characters counts as a citation even when it does
-not support the claim. A clean result never clears a page, so confirm by
-reading the text. A low score is a prompt for review, not a verdict that the
+The phrase lists are English-only and incomplete (new wordings slip through).
+A citation counts when a link, footnote, named source ("per Gartner"), or a
+following "Source:" line sits in the claim's own sentence; the script never
+checks that the source supports the claim. A clean result never clears a
+page, so confirm by reading the text. A low score is a prompt for review, not a verdict that the
 content is AI-generated.
 
 ## Draft Cleanup: AI Phrasing & Invisible Watermarks

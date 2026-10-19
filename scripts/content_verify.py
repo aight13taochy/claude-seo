@@ -16,11 +16,18 @@ What counts as a claim
 
 What counts as a citation marker
 ================================
-- A nearby (`<= 200 chars`) markdown/HTML link: `[Source](https://…)`
+A marker counts only inside the claim's own sentence, or in a
+"Source:"/"Via:"/"Cited in" line that directly follows it. A link two
+sentences away does not cite the claim.
+
+- A markdown/HTML link: `[Source](https://…)`
 - A footnote-style reference: `[^1]` or `[1]`
-- An inline attribution to a named source: "Forrester said", "per Gartner"
-- A schema.org Citation block (rough detection of nearby `@type`:
-  `"Citation"` JSON)
+- An inline attribution to a named source: "per Gartner", "according to
+  Forrester" (the name must be capitalised; "according to a study" and
+  "per day" do not count)
+- A schema.org Citation block (rough detection of `@type`: `"Citation"`);
+  like every marker it must sit in the claim's sentence, so a JSON-LD block
+  elsewhere on the page does not cite anything
 
 Output JSON::
 
@@ -64,21 +71,26 @@ _CLAIM_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"\b\d+(?:\.\d+)?\s*%\s+of\s+[a-zA-Z]+(?:\s+[a-zA-Z]+){0,4}",
                 re.IGNORECASE),
      "statistic"),
-    (re.compile(r"\b\d+(?:\.\d+)?\s*%\b"), "statistic"),
+    # "%" is not a word character, so a trailing \b never matched before a
+    # space or period: "rose 40% per year." produced no claim at all.
+    (re.compile(r"\b\d+(?:\.\d+)?\s*%(?!\w)"), "statistic"),
     (re.compile(r"\$\s?\d+(?:\.\d+)?\s*(?:million|billion|trillion|k|M|B)\b",
                 re.IGNORECASE), "quantity"),
     (re.compile(r"\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\s+\w+", re.IGNORECASE),
      "quantity"),
     (re.compile(r"\b\d+(?:\.\d+)?\s*(?:million|billion|trillion)\b",
                 re.IGNORECASE), "quantity"),
+    # Keywords are case-insensitive so a sentence-initial "According to" or
+    # "In 2025," is caught; the institution name stays capitalised.
     (re.compile(
-        r"\baccording\s+to\s+(?:a\s+)?(?:[A-Z][a-z]+\s+){1,4}(?:study|report|survey|analysis|paper)\b"),
+        r"(?i:\baccording\s+to\s+(?:an?\s+|the\s+)?)(?:[A-Z][a-z]+\s+){1,4}"
+        r"(?i:study|report|survey|analysis|paper)\b"),
      "authority"),
     (re.compile(
         r"\b(?:Forrester|Gartner|McKinsey|Pew|Nielsen|Statista|Deloitte|Edelman|MIT|Stanford|Harvard|Wharton)\s+(?:said|reports?|found|noted)",
         re.IGNORECASE), "authority"),
-    (re.compile(r"\bin\s+(?:19|20)\d{2}\b"), "temporal"),
-    (re.compile(r"\bby\s+20\d{2}\b"), "temporal"),
+    (re.compile(r"(?i:\bin)\s+(?:19|20)\d{2}\b"), "temporal"),
+    (re.compile(r"(?i:\bby)\s+20\d{2}\b"), "temporal"),
     (re.compile(r"\b\d+(?:\.\d+)?\s*(?:x|times)\s+(?:more|less|faster|slower|higher|lower|better|worse)\b",
                 re.IGNORECASE), "comparative"),
     (re.compile(r"\b(?:twice|thrice|half)\s+as\s+\w+", re.IGNORECASE),
@@ -86,36 +98,79 @@ _CLAIM_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
 )
 
 
-# Citation markers we look for in a +/-200 char window around each claim.
-# Standalone "see" and "per" are NOT included as triggers because they are
-# common English words that produce too many false positives ("see growth",
-# "per page"). We require the attribution form ("Source:", "Per Gartner",
-# "according to a Stanford study") or an explicit hyperlink / footnote.
+# Citation markers looked for in the claim's sentence (see _citation_for).
+# Standalone "see" and "per" are NOT triggers because they are common English
+# words ("see growth", "per page"). We require the attribution form
+# ("Source:", "Per Gartner", "according to Forrester") or an explicit
+# hyperlink / footnote. Only the keyword is case-insensitive: the name after
+# "per"/"according to" must start with a capital letter. A blanket IGNORECASE
+# here used to turn "[A-Z]" into any letter, so "per day" and "according to a"
+# counted as citations.
 _CITATION_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"\[[^\]]+\]\(https?://[^)]+\)"),  # markdown link
-    re.compile(r"<a\s+[^>]*href=[\"']https?://[^\"']+[\"']"),  # HTML link
+    re.compile(r"<a\s+[^>]*href=[\"']https?://[^\"']+[\"']", re.IGNORECASE),  # HTML link
     re.compile(r"\[\^?\d+\]"),  # footnote-style [1] or [^1]
-    re.compile(r"@type\s*:\s*[\"']Citation[\"']"),  # schema.org Citation
-    re.compile(
-        # "Source:", "Via:", "See also:", "Cited in", "Cited by", or
-        # "Per/According to" followed by a Proper Noun.
-        r"\b(?:source\s*:|via\s*:|see\s+also\s*:|cited\s+(?:in|by)|"
-        r"according\s+to|per)\s+[A-Z]",
-        re.IGNORECASE,
-    ),
+    re.compile(r"@type[\"']?\s*:\s*[\"']Citation[\"']"),  # schema.org Citation
+    re.compile(r"(?i:\b(?:source|sources|via|see\s+also)\s*:)\s*\S"),
+    re.compile(r"(?i:\bcited\s+(?:in|by))\s+\S"),
+    re.compile(r"(?i:\b(?:according\s+to|per))\s+(?:the\s+)?[A-Z][A-Za-z]"),
 )
 
+# A line that opens with one of these labels attributes the sentence just
+# before it ("47% of buyers churn.\nSource: Gartner 2025").
+# The colon is required for source/via so "Via the app, ..." is not taken for
+# an attribution line.
+_SOURCE_LINE_RE = re.compile(
+    r"(?i:\s*(?:(?:source|sources|via)\s*:|cited\s+(?:in|by)\b))\s*\S")
 
-def _has_citation_near(text: str, position: int, window: int = 200) -> str | None:
-    """Return the matched citation text if any citation pattern hits within
-    ``window`` chars of ``position``, otherwise None."""
-    start = max(0, position - window)
-    end = min(len(text), position + window)
-    snippet = text[start:end]
+# Sentence boundaries: end punctuation followed by whitespace and a capital,
+# digit, quote, or bracket-free opener. A footnote marker after the period
+# ("growth. [1]") stays with its sentence because "[" is not an opener.
+# Paragraph breaks and list items always end a sentence; a single hard line
+# break inside a paragraph does not, since drafts are often hard-wrapped.
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])")
+_BLOCK_BREAK_RE = re.compile(r"\n\s*\n|\n(?=\s*(?:[-*+]|\d+[.)]|#{1,6})\s)")
+
+
+def _sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Split ``text`` into (start, end) spans of sentences."""
+    spans: list[tuple[int, int]] = []
+    block_start = 0
+    blocks = [m.start() for m in _BLOCK_BREAK_RE.finditer(text)] + [len(text)]
+    for block_end in blocks:
+        start = block_start
+        for m in _SENTENCE_END_RE.finditer(text, block_start, block_end):
+            spans.append((start, m.start()))
+            start = m.end()
+        spans.append((start, block_end))
+        block_start = block_end
+    return [(s, e) for s, e in spans if text[s:e].strip()]
+
+
+def _first_citation(snippet: str) -> str | None:
     for pattern in _CITATION_PATTERNS:
         m = pattern.search(snippet)
         if m:
             return m.group(0)[:80]
+    return None
+
+
+def _citation_for(text: str, spans: list[tuple[int, int]], position: int) -> str | None:
+    """Return the citation for the claim at ``position``, or None.
+
+    Looks in the claim's own sentence, then in the next sentence only when
+    that sentence is a "Source:"-style attribution line.
+    """
+    for i, (start, end) in enumerate(spans):
+        if start <= position < end:
+            found = _first_citation(text[start:end])
+            if found:
+                return found
+            if i + 1 < len(spans):
+                nxt = text[spans[i + 1][0]:spans[i + 1][1]]
+                if _SOURCE_LINE_RE.match(nxt):
+                    return nxt.strip()[:80]
+            return None
     return None
 
 
@@ -130,9 +185,10 @@ def extract_claims(text: str) -> list[dict]:
                 continue
             found_spans.append((m.start(), m.end(), label))
 
+    sentences = _sentence_spans(text)
     claims: list[dict] = []
     for start, end, label in sorted(found_spans):
-        cite = _has_citation_near(text, start)
+        cite = _citation_for(text, sentences, start)
         claims.append({
             "text": text[start:end].strip(),
             "kind": label,

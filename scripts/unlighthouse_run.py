@@ -10,10 +10,10 @@ support without a paid Google Cloud bill.
 
 This wrapper:
   - Validates the target via url_safety before any subprocess starts.
-  - Builds the route list itself (see "SSRF bounds" below) and invokes
-    ``npx --yes --package unlighthouse@0.13.5 unlighthouse-ci …`` with
-    sensible defaults (mobile form factor, JSON reporter, generated
-    config file).
+  - Pins the audited host to the validated IP in every process that can
+    reach the network (see "SSRF and DNS rebinding" below).
+  - Invokes ``npx --yes unlighthouse-ci@0.13.5 …`` with sensible
+    defaults (mobile form factor, JSON reporter, generated config file).
   - Captures the JSON result the CLI writes and returns it parsed,
     normalized to a flat route list regardless of which reporter shape
     produced it, so claude-seo agents can ingest the result without
@@ -38,31 +38,39 @@ The same generated config sets ``puppeteerClusterOptions.timeout``
 This guards against a single hung page consuming the whole crawl's
 time budget, independent of the subprocess-level ``--timeout``.
 
-SSRF bounds
-===========
-Unlighthouse reaches the audited site from two places: Node (axios, for
-the start-up site check and each page's HTML) and its own Puppeteer
-Chromium, to which every Lighthouse worker attaches by debugging port.
-Both would otherwise resolve the host again after ``validate_url_strict``
-checked it, and its crawler follows any link whose text merely contains
-the site URL (``https://site@10.0.0.1/``) or sits on a subdomain. So:
+SSRF and DNS rebinding
+======================
+Unlighthouse resolves DNS and follows redirects on its own, in two places
+Python's url_safety cannot reach:
 
-  - Chromium gets ``url_safety.chromium_launch_args()`` through the
-    config's ``puppeteerOptions.args``, which unlighthouse forwards to
-    ``Cluster.launch()`` and on to ``puppeteer.launch()``
-    (``launchPuppeteerCluster`` in @unlighthouse/core 0.13.5).
-  - Node gets the same pin from ``node_dns_pin.cjs``, preloaded with
-    ``NODE_OPTIONS=--require`` into every Node process of the run.
-  - Unlighthouse never discovers routes. This script reads the site's
-    sitemaps (or, without one, the home page's links) through url_safety
-    and passes only same-origin URLs as the config's ``urls``, which turns
-    off unlighthouse's sitemap, robots.txt and crawler discovery
-    (``resolveReportableRoutes`` in @unlighthouse/core 0.13.5).
+- **Chromium** (Puppeteer, and every Lighthouse run, which attaches to the
+  same browser through its DevTools port). The generated config passes
+  ``puppeteerOptions.args = chromium_launch_args(target, pinned_ip)``,
+  forwarded to ``puppeteer.launch()`` via puppeteer-cluster
+  (https://unlighthouse.dev/api/config#puppeteeroptions), so the audited
+  host always connects to the pre-flight IP.
+- **Node** (axios for robots.txt, sitemaps and every crawled route; got for
+  sitemaps). ``scripts/node_net_guard.cjs`` is preloaded through
+  ``NODE_OPTIONS=--require``: it pins the audited host and refuses any
+  connection to a non-public address, including redirects to IP literals
+  such as ``169.254.169.254``.
 
-Residual risk: neither Chromium nor axios inside unlighthouse can be given
-a per-request guard, so a redirect from the audited site to another host
-or to a private IP literal is followed without re-validation. Every run
-reports this in ``warnings``; see SECURITY.md.
+Unlighthouse's own route discovery is switched off. Its crawler queues any
+link whose text merely contains the site URL (``https://site@10.0.0.1/``)
+or sits on a subdomain, and Lighthouse would load those routes in Chromium,
+which has no per-request guard and pins only the audited host. This script
+reads the site's sitemaps (or, without one, the target page's links)
+through url_safety and passes only URLs with the target's exact scheme,
+host and port as the config's ``urls``, which turns off unlighthouse's
+sitemap, robots.txt and crawler discovery (``resolveReportableRoutes`` in
+@unlighthouse/core 0.13.5).
+
+Residual risk: loopback stays reachable from Node (Puppeteer and Lighthouse
+need Chromium's DevTools port on 127.0.0.1), and Chromium follows a
+redirect from the audited site, and loads third-party hosts, with no
+per-request guard. Every run reports this in ``warnings``. With a trusted proxy
+(``CLAUDE_SEO_TRUST_PROXY``) there is no local resolver to rebind and
+neither pin is applied, as in the other browser paths.
 
 Prerequisites
 =============
@@ -87,7 +95,7 @@ import subprocess
 import sys
 import tempfile
 from collections import deque
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 from urllib.parse import urldefrag, urljoin, urlparse
 
@@ -104,18 +112,29 @@ from sitemap_discovery import (  # noqa: E402
     _bounded_fetch,
     _robots_sitemaps,
 )
-from url_safety import URLSafetyError, chromium_launch_args, validate_url_strict  # noqa: E402
+from url_safety import (  # noqa: E402
+    PROXY_RESOLVES,
+    URLSafetyError,
+    chromium_launch_args,
+    normalize_hostname,
+    validate_url_strict,
+)
 
 UNLIGHTHOUSE_PIN = "unlighthouse@0.13.5"
-NODE_DNS_PIN = os.path.join(_SCRIPTS_DIR, "node_dns_pin.cjs")
+NODE_NET_GUARD = Path(_SCRIPTS_DIR) / "node_net_guard.cjs"
 MAX_HOMEPAGE_BYTES = 5 * 1024 * 1024
 
 RESIDUAL_RISK_WARNING = (
     "unlighthouse: the audited host is DNS-pinned and only same-origin URLs are "
-    "scanned, but unlighthouse's Chromium and Node fetches have no per-request "
-    "guard: a redirect from the site to another host or a private IP is followed "
-    "without re-validation. Only audit sites you trust (see SECURITY.md)."
+    "scanned, but Chromium follows a redirect from the site to another host or a "
+    "private IP without re-validation, and Node can still reach loopback. Only "
+    "audit sites you trust (see SECURITY.md)."
 )
+# Proxies npm (npx) may connect through; the Node guard must not block them.
+# Matched case-insensitively: Windows upper-cases every os.environ key.
+_PROXY_ENV_KEYS = frozenset({
+    "https_proxy", "http_proxy", "all_proxy", "npm_config_proxy", "npm_config_https_proxy",
+})
 
 # Numeric metadata keys that are not per-category scores; excluded from
 # aggregate score averaging so a route's `score` (the Lighthouse overall
@@ -135,58 +154,26 @@ def _check_node() -> str | None:
 def build_config(
     max_routes: int | None,
     page_timeout_ms: int,
+    chromium_args: list[str] | None = None,
     *,
     urls: list[str] | None = None,
-    chromium_args: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the object written to the generated unlighthouse config file.
 
     ``max_routes=None`` maps to ``scanner.maxRoutes: false`` (unlimited),
-    matching the documented type ``number | false``. ``urls`` replaces
-    unlighthouse's own route discovery; ``chromium_args`` is appended to
-    Puppeteer's default Chromium flags.
+    matching the documented type ``number | false``. ``chromium_args`` (from
+    ``chromium_launch_args``) go to ``puppeteerOptions.args``; ``urls``
+    replaces unlighthouse's own route discovery.
     """
     config: dict[str, Any] = {
         "scanner": {"maxRoutes": max_routes if max_routes is not None else False},
         "puppeteerClusterOptions": {"timeout": page_timeout_ms},
     }
-    if urls:
-        config["urls"] = list(urls)
     if chromium_args:
         config["puppeteerOptions"] = {"args": list(chromium_args)}
+    if urls:
+        config["urls"] = list(urls)
     return config
-
-
-def pin_resolution(target: str, pinned_ip: str) -> tuple[list[str], dict[str, str]]:
-    """Chromium args and Node environment that pin the audited host.
-
-    Both are empty when there is nothing to pin (an IP-literal target, or
-    a trusted proxy resolving it). Raises ``URLSafetyError`` for a host
-    that cannot be pinned, so the run fails closed.
-    """
-    chromium_args = chromium_launch_args(target, pinned_ip)
-    if not chromium_args:
-        return [], {}
-    # "--host-resolver-rules=MAP <host> <ip>": chromium_launch_args has
-    # already normalized the host (lowercase, punycode, no trailing dot)
-    # and refused any containing a space, so the rule splits cleanly.
-    _, host, ip = chromium_args[0].split(" ")
-    return chromium_args, {"CLAUDE_SEO_PIN_HOST": host, "CLAUDE_SEO_PIN_IP": ip}
-
-
-def build_env(pin_env: dict[str, str], base: dict[str, str] | None = None) -> dict[str, str]:
-    """Subprocess environment that preloads ``node_dns_pin.cjs`` into Node.
-
-    Any existing ``NODE_OPTIONS`` is kept. The preload path is quoted the
-    way Node parses ``NODE_OPTIONS``, so a path with spaces still loads.
-    """
-    env = dict(os.environ if base is None else base)
-    if not pin_env:
-        return env
-    quoted = NODE_DNS_PIN.replace("\\", "\\\\").replace('"', '\\"')
-    env["NODE_OPTIONS"] = f'{env.get("NODE_OPTIONS", "")} --require "{quoted}"'.strip()
-    env.update(pin_env)
-    return env
 
 
 def _origin_key(url: str) -> tuple[str, str, int] | None:
@@ -288,6 +275,47 @@ def discover_routes(target: str, max_routes: int | None) -> list[str]:
     return routes
 
 
+def node_require_option(path: PurePath) -> str:
+    """``--require "<path>"`` quoted the way Node parses NODE_OPTIONS.
+
+    Inside double quotes Node treats a backslash as an escape, so Windows
+    paths need their backslashes doubled; spaces stay inside the quotes.
+    """
+    escaped = str(path).replace("\\", "\\\\").replace('"', '\\"')
+    return f'--require "{escaped}"'
+
+
+def build_guard_env(target: str, pinned_ip: str, base_env: dict[str, str]) -> dict[str, str]:
+    """Environment that preloads ``node_net_guard.cjs`` into every Node process.
+
+    Returns ``base_env`` unchanged when a trusted proxy resolves the target
+    (``PROXY_RESOLVES``): there is no local resolver to rebind. The proxy
+    hosts npm may need are passed as ``CLAUDE_SEO_NET_ALLOW``.
+    """
+    env = dict(base_env)
+    if pinned_ip == PROXY_RESOLVES:
+        return env
+    host = normalize_hostname(urlparse(target).hostname or "")
+    try:
+        host = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        pass
+    allow = set()
+    for key, value in env.items():
+        if key.lower() not in _PROXY_ENV_KEYS or not value:
+            continue
+        proxy_host = urlparse(value if "://" in value else f"http://{value}").hostname
+        if proxy_host:
+            allow.add(proxy_host.lower())
+    require = node_require_option(NODE_NET_GUARD)
+    env["NODE_OPTIONS"] = f"{env.get('NODE_OPTIONS', '')} {require}".strip()
+    env["CLAUDE_SEO_NET_GUARD"] = "1"
+    env["CLAUDE_SEO_PIN_HOST"] = host
+    env["CLAUDE_SEO_PIN_IP"] = pinned_ip
+    env["CLAUDE_SEO_NET_ALLOW"] = ",".join(sorted(allow))
+    return env
+
+
 def write_config_file(out_dir: Path, config: dict[str, Any]) -> Path:
     """Write an ESM config module unlighthouse-ci loads via --config-file.
 
@@ -386,7 +414,7 @@ def run(
 ) -> dict:
     try:
         target, pinned_ip = validate_url_strict(target)
-        chromium_args, pin_env = pin_resolution(target, pinned_ip)
+        chromium_args = chromium_launch_args(target, pinned_ip)
     except URLSafetyError as exc:
         return {"ok": False, "error": f"url_safety: {exc}"}
 
@@ -399,20 +427,20 @@ def run(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     urls = discover_routes(target, max_routes)
-    config = build_config(max_routes, page_timeout * 1000, urls=urls, chromium_args=chromium_args)
+    config = build_config(max_routes, page_timeout * 1000, chromium_args, urls=urls)
     config_path = write_config_file(out_dir, config)
     cmd = build_cmd(target, device=device, out_dir=out_dir, config_path=config_path)
 
     try:
         proc = subprocess.run(
             cmd,
-            env=build_env(pin_env),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
             check=False,
+            env=build_guard_env(target, pinned_ip, dict(os.environ)),
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"unlighthouse timed out after {timeout}s",
@@ -440,10 +468,10 @@ def run(
         "routes": normalized["routes"],
         "route_count": normalized["route_count"],
         "aggregate_scores": normalized["aggregate_scores"],
-        "scanned_urls": len(urls),
-        "warnings": [RESIDUAL_RISK_WARNING],
         "stdout_tail": proc.stdout[-2000:] if proc.stdout else "",
         "stderr_tail": proc.stderr[-2000:] if proc.stderr else "",
+        "scanned_urls": len(urls),
+        "warnings": [RESIDUAL_RISK_WARNING],
     }
 
 
