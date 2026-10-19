@@ -7,11 +7,11 @@ echo "Removing ScrapeGraphAI extension..."
 rm -rf "${HOME}/.claude/skills/seo-scrapegraphai"
 echo "v Removed skill files and Python environment"
 
-# Remove MCP entry from settings.json
-SETTINGS_FILE="${HOME}/.claude/settings.json"
-if [ -f "${SETTINGS_FILE}" ]; then
-    python3 - "${SETTINGS_FILE}" <<'PY' || echo "  Warning: Could not update settings.json automatically."
-import json, os, sys
+# Remove MCP entry from ~/.claude.json
+MCP_CONFIG_FILE="${HOME}/.claude.json"
+if [ -f "${MCP_CONFIG_FILE}" ]; then
+    python3 - "${MCP_CONFIG_FILE}" <<'PY' || echo "  Warning: Could not update ~/.claude.json automatically."
+import json, os, sys, tempfile
 
 settings_path = sys.argv[1]
 with open(settings_path, 'r') as f:
@@ -19,11 +19,19 @@ with open(settings_path, 'r') as f:
 
 if 'mcpServers' in settings and 'scrapegraph-mcp' in settings['mcpServers']:
     del settings['mcpServers']['scrapegraph-mcp']
-    with open(settings_path, 'w') as f:
-        json.dump(settings, f, indent=2)
-    print('v Removed MCP server from settings.json')
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings_path) or '.', prefix='.settings.', suffix='.json')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(settings, f, indent=2)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, settings_path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    print('v Removed MCP server from ~/.claude.json')
 else:
-    print('  MCP server not found in settings.json (already removed)')
+    print('  MCP server not found in ~/.claude.json (already removed)')
 PY
 fi
 

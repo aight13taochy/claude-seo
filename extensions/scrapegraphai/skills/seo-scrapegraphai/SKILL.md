@@ -11,7 +11,7 @@ argument-hint: "[command] <url|query>"
 license: MIT
 compatibility: "Requires the scrapegraph-mcp MCP server (Python 3.10+) and a ScrapeGraphAI API key"
 metadata:
-  version: "2.2.5"
+  version: "2.4.2"
   category: seo
 ---
 
@@ -238,7 +238,7 @@ When ScrapeGraphAI is available and the site is JS-rendered or bot-protected:
 | `402` / insufficient credits | Credits exhausted | Check dashboard, top up or wait for reset |
 | `429 Too Many Requests` | Rate limited | Wait 60s, lower `num_results` or `max_pages` |
 | Crawl status stays pending | Large crawl still running | Keep polling `smartcrawler_fetch_results`; lower `max_pages` next time |
-| Tool not available | Server not started | Restart Claude Code; check `~/.claude/settings.json` for `scrapegraph-mcp` |
+| Tool not available | Server not started | Restart Claude Code; check `~/.claude.json` for `scrapegraph-mcp` |
 
 **Graceful fallback:** If ScrapeGraphAI is unavailable, inform the user and suggest:
 1. `render_page.py` for JS-rendered single pages (no API cost)

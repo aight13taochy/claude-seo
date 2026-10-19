@@ -32,7 +32,7 @@ The installer:
 1. Creates an isolated virtual environment in `~/.claude/skills/seo-scrapegraphai/.venv`
 2. Installs the pinned `scrapegraph-mcp==1.0.1` package into it
 3. Copies the `seo-scrapegraphai` skill
-4. Registers the `scrapegraph-mcp` server in `~/.claude/settings.json` with your key
+4. Registers the `scrapegraph-mcp` server in `~/.claude.json` with your key
 
 Nothing is installed into your system Python.
 
@@ -85,7 +85,7 @@ names in `skills/seo-scrapegraphai/SKILL.md`.
 ## Troubleshooting
 
 **MCP not connecting?**
-- Check: `cat ~/.claude/settings.json | python3 -m json.tool | grep -A6 scrapegraph`
+- Check: `cat ~/.claude.json | python3 -m json.tool | grep -A6 scrapegraph`
 - Test the server by hand: `SGAI_API_KEY=x ~/.claude/skills/seo-scrapegraphai/.venv/bin/python -c "import scrapegraph_mcp.server"`
 - Manual config: see [SCRAPEGRAPHAI-SETUP.md](docs/SCRAPEGRAPHAI-SETUP.md)
 
