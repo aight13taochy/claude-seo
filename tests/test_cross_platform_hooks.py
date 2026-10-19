@@ -69,6 +69,72 @@ def test_hook_launcher_preserves_blocking_exit_code_two(tmp_path: Path) -> None:
     assert proc.returncode == 2
 
 
+@pytest.mark.skipif(os.name == "nt", reason="uses a POSIX shell script and chmod")
+def test_hook_launcher_does_not_rerun_hook_after_a_spawn_error(tmp_path: Path) -> None:
+    """A spawn error after a successful probe must not hand the hook to the
+    next interpreter: that ran the hook twice and ended in exit 1, the
+    signature of the intermittent Windows CI timeout."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not available in this test environment")
+
+    marker = tmp_path / "ran.txt"
+    hook = tmp_path / "hook.py"
+    hook.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(marker)!r}).open('a').write('ran\\n')\n"
+        "sys.exit(2)\n",
+        encoding="utf-8",
+    )
+    # Passes the probe, then loses its execute bit, so spawning the hook
+    # with it fails with EACCES rather than ENOENT.
+    fake = tmp_path / "fake-python"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-c" ]; then chmod -x "$0"; fi\n'
+        f'exec {sys.executable!r} "$@"\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    env = os.environ.copy()
+    env["CLAUDE_SEO_PYTHON"] = str(fake)
+
+    proc = subprocess.run(
+        [node, str(HOOK_LAUNCHER), str(hook)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert not marker.exists(), "hook ran under a fallback interpreter"
+    assert proc.returncode == 1
+    assert "CLAUDE_SEO_PYTHON" in proc.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses a POSIX path")
+def test_hook_launcher_falls_through_when_interpreter_is_missing(tmp_path: Path) -> None:
+    """ENOENT means the interpreter is gone: trying the next one is safe
+    because the hook never started."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not available in this test environment")
+    hook = tmp_path / "hook.py"
+    hook.write_text("import sys\nsys.exit(2)\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["CLAUDE_SEO_PYTHON"] = str(tmp_path / "no-such-python")
+
+    proc = subprocess.run(
+        [node, str(HOOK_LAUNCHER), str(hook)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert proc.returncode == 2, proc.stderr
+
+
 def test_windows_installer_prefers_py_launcher_and_rejects_store_stubs() -> None:
     text = INSTALL_PS1.read_text(encoding="utf-8")
     py_pos = text.index("Exe = 'py'; Args = @('-3')")
