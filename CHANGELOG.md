@@ -28,6 +28,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/seo scrapegraphai` for prompt-driven extraction, search, markdown and
   multi-format scraping, async crawling, and page-change monitors.
 
+- `url_safety.chromium_launch_args(url, pinned_ip)`: the Chromium launch
+  arguments that pin the audited host to the pre-flight IP. See Security.
+
+- `tests/test_url_safety_entrypoints.py`: fails if repository code takes
+  `validate_url` from `google_auth`, or launches Chromium without the
+  resolver pin.
+
+### Changed
+
+- One URL-safety rule across CONTRIBUTING.md, CLAUDE.md, AGENTS.md,
+  SECURITY.md and the seo-drift and seo-ecommerce skills: a script that
+  opens a socket calls `validate_url_strict()` and fetches through the
+  `safe_requests_*` helpers; `validate_url()` (parse-time, no DNS) is only
+  for a URL handed to a third-party API that fetches it. CONTRIBUTING.md
+  previously named `validate_url()` as the fetch guard, and CLAUDE.md named
+  `validate_url_strict()`.
+
+- The 13 scripts that imported `validate_url` from `google_auth` now import
+  it from `url_safety`. Behaviour is identical: the old name was a wrapper.
+
+### Deprecated
+
+- `google_auth.validate_url`: emits `DeprecationWarning`. The credentials
+  module is not an SSRF guard, and a homonym there was the obvious wrong
+  import for a contributor. Kept as an alias for third-party callers.
+
 ### Fixed
 
 - Windows installer smoke workflow on forks and mirrors: on a pull request
@@ -51,6 +77,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `crawl_*`, `monitor_*`, `credits`, `history_*`) instead of the retired
   `smartscraper`/`markdownify`/`searchscraper` set; the Python 3.10
   requirement is gone.
+
+### Security
+
+- Chromium is launched with `--host-resolver-rules` mapping the audited host
+  to the IP `validate_url_strict()` validated (`render_page.py`,
+  `capture_screenshot.py`, `analyze_visual.py`). A DNS-rebinding answer can
+  no longer send the main document or a same-host subresource to a private
+  address between the pre-flight and Chromium's own lookup. A hostname that
+  cannot be written as one resolver rule is refused before Chromium starts.
+  Third-party hosts stay covered by the route handler only (SECURITY.md).
 
 ## [2.4.2] - 2026-10-04
 

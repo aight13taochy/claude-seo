@@ -27,11 +27,13 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from google_auth import get_oauth_credentials, load_config, validate_url
+    from google_auth import get_oauth_credentials, load_config
+    from url_safety import validate_url
 except ImportError:
     import os
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from google_auth import get_oauth_credentials, load_config, validate_url
+    from google_auth import get_oauth_credentials, load_config
+    from url_safety import validate_url
 
 GSC_SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
 

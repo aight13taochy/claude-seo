@@ -328,7 +328,8 @@ def extract_lhr(data: dict) -> dict:
 def run_psi(url: str, strategy: str, api_key: Optional[str], timeout: int = 180) -> dict:
     """Run the agentic-browsing category through PSI v5 and return the LHR."""
     import requests
-    from google_auth import google_api_key_headers, redact_google_api_key, validate_url
+    from google_auth import google_api_key_headers, redact_google_api_key
+    from url_safety import validate_url
 
     if not validate_url(url):
         raise ValueError("Invalid URL. Only http/https URLs to public hosts are accepted.")

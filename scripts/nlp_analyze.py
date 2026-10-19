@@ -28,9 +28,8 @@ try:
         get_api_key,
         google_api_key_headers,
         redact_google_api_key,
-        validate_url,
     )
-    from url_safety import URLSafetyError, decode_response_text, safe_requests_get
+    from url_safety import URLSafetyError, decode_response_text, safe_requests_get, validate_url
 except ImportError:
     import os
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -38,9 +37,8 @@ except ImportError:
         get_api_key,
         google_api_key_headers,
         redact_google_api_key,
-        validate_url,
     )
-    from url_safety import URLSafetyError, decode_response_text, safe_requests_get
+    from url_safety import URLSafetyError, decode_response_text, safe_requests_get, validate_url
 
 NLP_ENDPOINT = "https://language.googleapis.com/v2/documents:annotateText"
 NLP_V1_ENTITIES_ENDPOINT = "https://language.googleapis.com/v1/documents:analyzeEntities"

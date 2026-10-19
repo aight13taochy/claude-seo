@@ -81,17 +81,19 @@ delegated to the agent-process layer.
 Limitations
 ===========
 Playwright/Chromium-based fetches (``render_page.py``,
-``capture_screenshot.py``) perform their own DNS resolution inside
-Chromium and therefore cannot be DNS-pinned at the Python layer. Those
-scripts must:
+``capture_screenshot.py``, ``analyze_visual.py``) perform their own DNS
+resolution inside Chromium and therefore cannot be DNS-pinned at the
+Python layer. Those scripts must:
 
   1. Call ``validate_url_strict()`` as a pre-flight check, AND
-  2. Attach a Playwright ``route()`` handler that re-validates each
+  2. Launch Chromium with ``chromium_launch_args(url, pinned_ip)``, which
+     pins the audited host to the pre-flight IP inside Chromium, AND
+  3. Attach a Playwright ``route()`` handler that re-validates each
      resolved request IP and aborts subresource fetches to private
      ranges.
 
-The residual DNS-rebinding risk for browser-based fetches is documented
-in SECURITY.md.
+The residual DNS-rebinding risk for browser-based fetches (hosts other
+than the audited one) is documented in SECURITY.md.
 """
 
 from __future__ import annotations
@@ -124,6 +126,7 @@ __all__ = [
     "safe_requests_head",
     "safe_requests_session",
     "make_safe_playwright_route_handler",
+    "chromium_launch_args",
     "DEFAULT_USER_AGENT",
     "DEFAULT_REQUEST_HEADERS",
 ]
@@ -478,7 +481,12 @@ def normalize_hostname(hostname: str) -> str:
 
 def validate_url(url: str) -> bool:
     """
-    Back-compat boolean validator. Does not resolve DNS.
+    Parse-time boolean validator. Does not resolve DNS.
+
+    Use it only for a URL this process does not fetch itself: one handed to
+    a third-party API that fetches it (PageSpeed Insights, CrUX, Search
+    Console). Before opening a socket, call ``validate_url_strict`` and fetch
+    through the ``safe_requests_*`` helpers instead.
 
     Returns False when:
         - Scheme is not http or https
@@ -1100,6 +1108,63 @@ def make_safe_playwright_route_handler(
                 pass
 
     return handler
+
+
+# Characters Chromium accepts in a --host-resolver-rules hostname. A rule
+# string is comma-separated and space-delimited, so anything outside this set
+# could inject a second rule; such a hostname is refused, never passed through.
+_RESOLVER_RULE_HOST_RE = re.compile(r"^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$")
+
+
+def chromium_launch_args(url: str, pinned_ip: str) -> list[str]:
+    """
+    Chromium launch arguments that pin the audited host to the pre-flight IP.
+
+    Chromium resolves DNS itself, so the Python-layer pin in :func:`_pin_dns`
+    cannot reach it, and a rebinding attacker could answer the pre-flight with
+    a public IP and Chromium's own lookup with a private one. Passing the
+    returned list as ``chromium.launch(args=...)`` makes Chromium connect to
+    ``pinned_ip`` for the audited host, the address :func:`validate_url_strict`
+    already checked, closing that race for the main document and every
+    same-host subresource. Other hosts (third-party subresources, cross-host
+    redirects) are still resolved by Chromium and re-validated by
+    :func:`make_safe_playwright_route_handler`.
+
+    Args:
+        url: the URL returned by :func:`validate_url_strict`.
+        pinned_ip: the IP returned alongside it.
+
+    Returns:
+        ``["--host-resolver-rules=MAP <host> <ip>"]``, or ``[]`` when there is
+        nothing to pin: the host is already an IP literal, or a trusted proxy
+        resolves the target (``pinned_ip == PROXY_RESOLVES``).
+
+    Raises:
+        URLSafetyError: the IP is not a literal, or the hostname cannot be
+        written as a single resolver rule. Fail-closed: an unpinnable host is
+        refused rather than handed to Chromium's resolver.
+    """
+    if pinned_ip == PROXY_RESOLVES:
+        return []
+    try:
+        ipaddress.ip_address(pinned_ip)
+    except ValueError as exc:
+        raise URLSafetyError(f"Pinned address is not an IP literal: {pinned_ip!r}") from exc
+
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        raise URLSafetyError("URL has no hostname")
+    host = normalize_hostname(parsed.hostname)
+    if _looks_like_ip(host):
+        return []
+    try:
+        # Chromium resolves the punycode form, so the rule must name it.
+        host = host.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise URLSafetyError(f"Hostname cannot be pinned in Chromium: {host!r}") from exc
+    if not _RESOLVER_RULE_HOST_RE.match(host):
+        raise URLSafetyError(f"Hostname cannot be pinned in Chromium: {host!r}")
+    return [f"--host-resolver-rules=MAP {host} {pinned_ip}"]
 
 
 def _cli() -> None:
