@@ -29,7 +29,7 @@ python3 -m venv ~/.claude/skills/seo-scrapegraphai/.venv
 ~/.claude/skills/seo-scrapegraphai/.venv/bin/python -m pip install "scrapegraph-mcp==1.0.1"
 ```
 
-Then add this to `~/.claude/settings.json` (replace `/home/you` with your home
+Then add this to `~/.claude.json` (replace `/home/you` with your home
 directory, and `Scripts\python.exe` instead of `bin/python` on Windows):
 
 ```json

@@ -10,7 +10,10 @@ main() {
     SKILL_DIR="${HOME}/.claude/skills/seo-scrapegraphai"
     VENV_DIR="${SKILL_DIR}/.venv"
     SEO_SKILL_DIR="${HOME}/.claude/skills/seo"
-    SETTINGS_FILE="${HOME}/.claude/settings.json"
+    # MCP servers live in ~/.claude.json (the file `claude mcp add` writes).
+    # NOT ~/.claude/settings.json - `mcpServers` is not a key Claude Code reads
+    # there, so entries written to settings.json silently never load.
+    MCP_CONFIG_FILE="${HOME}/.claude.json"
     SGAI_MCP_VERSION="1.0.1"
 
     echo "════════════════════════════════════════"
@@ -95,27 +98,28 @@ main() {
     fi
     echo "  v scrapegraph-mcp importable"
 
-    # Merge MCP config into settings.json
+    # Merge MCP config into ~/.claude.json
     echo "-> Configuring MCP server..."
 
-    # Credentials are passed as argv (never interpolated into the source string)
-    # and the settings file is written atomically with 0600 permissions.
+    # Credentials travel in the environment (never argv, never interpolated into the source string)
+    # and the config file is written atomically with 0600 permissions.
     #
     # The server is launched via `python -c` instead of the `scrapegraph-mcp`
     # console script: the console script's main() prints a banner to stdout,
     # which corrupts the stdio JSON-RPC framing. Calling mcp.run() directly
     # keeps stdout clean.
-    python3 - "${SETTINGS_FILE}" "${SGAI_API_KEY}" "${VENV_PYTHON}" <<'PY'
+    CLAUDE_SEO_SECRET="${SGAI_API_KEY}" python3 - "${MCP_CONFIG_FILE}" "${VENV_PYTHON}" <<'PY'
 import json, os, sys, tempfile
 
-settings_path, api_key, venv_python = sys.argv[1:4]
+settings_path, venv_python = sys.argv[1], sys.argv[2]
+api_key = os.environ["CLAUDE_SEO_SECRET"]
 
 if os.path.exists(settings_path):
     try:
         with open(settings_path) as f:
             settings = json.load(f)
     except json.JSONDecodeError:
-        settings = {}
+        sys.exit(f"✗ {settings_path} is not valid JSON. Nothing was changed; fix it and rerun.")
 else:
     settings = {}
 
@@ -139,13 +143,8 @@ except Exception:
         os.unlink(tmp)
     raise
 
-print('  v MCP server configured in settings.json')
+print('  v MCP server configured in ~/.claude.json')
 PY
-    if [ $? -ne 0 ]; then
-        echo "  Warning: Could not auto-configure MCP server."
-        echo "  Add the scrapegraph-mcp server manually to ~/.claude/settings.json"
-        echo "  See: extensions/scrapegraphai/docs/SCRAPEGRAPHAI-SETUP.md"
-    fi
 
     echo ""
     echo "v ScrapeGraphAI extension installed successfully!"
