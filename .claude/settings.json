@@ -1,0 +1,30 @@
+{
+  "$comment": "Shared project settings for this fork. In a trusted checkout (a claude.ai cloud session included) Claude Code registers this repository as the claude-seo marketplace, enables the plugin, and the SessionStart hook prepares the Python runtime and Chromium. CLAUDE_SEO_TRUST_PROXY lets url_safety work behind the cloud sandbox's loopback CONNECT proxy; it has no effect when no proxy is configured. See SECURITY.md.",
+  "extraKnownMarketplaces": {
+    "agricidaniel-claude-seo": {
+      "source": { "source": "github", "repo": "aight13taochy/claude-seo" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "claude-seo@agricidaniel-claude-seo": true
+  },
+  "env": {
+    "CLAUDE_SEO_TRUST_PROXY": "1",
+    "CLAUDE_SEO_DATA_DIR": "~/.claude/plugins/data/claude-seo"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/seo-runtime.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
