@@ -44,16 +44,21 @@ Unlighthouse resolves DNS and follows redirects on its own, in two places
 Python's url_safety cannot reach:
 
 - **Chromium** (Puppeteer, and every Lighthouse run, which attaches to the
-  same browser through its DevTools port). The generated config passes
-  ``puppeteerOptions.args = chromium_launch_args(target, pinned_ip)``,
-  forwarded to ``puppeteer.launch()`` via puppeteer-cluster
-  (https://unlighthouse.dev/api/config#puppeteeroptions), so the audited
-  host always connects to the pre-flight IP.
+  same browser through its DevTools port). Its whole traffic goes through
+  ``url_safety.EgressGuardProxy``, a local proxy this script runs for the
+  length of the scan: the generated config passes the proxy flags, with
+  ``chromium_launch_args(target, pinned_ip)``, as ``puppeteerOptions.args``
+  (forwarded to ``puppeteer.launch()`` via puppeteer-cluster,
+  https://unlighthouse.dev/api/config#puppeteeroptions). The proxy resolves
+  each host itself, refuses non-public addresses and connects to the address
+  it checked, so redirects, third-party subresources and popups are judged
+  like the page, and the audited origin always connects to the pre-flight IP.
 - **Node** (axios for robots.txt, sitemaps and every crawled route; got for
   sitemaps). ``scripts/node_net_guard.cjs`` is preloaded through
   ``NODE_OPTIONS=--require``: it pins the audited host and refuses any
   connection to a non-public address, including redirects to IP literals
-  such as ``169.254.169.254``.
+  such as ``169.254.169.254``. Loopback is refused too, except the DevTools
+  ports of the Chromium instances the scan itself starts.
 
 Unlighthouse's own route discovery is switched off. Its crawler queues any
 link whose text merely contains the site URL (``https://site@10.0.0.1/``)
@@ -65,12 +70,10 @@ host and port as the config's ``urls``, which turns off unlighthouse's
 sitemap, robots.txt and crawler discovery (``resolveReportableRoutes`` in
 @unlighthouse/core 0.13.5).
 
-Residual risk: loopback stays reachable from Node (Puppeteer and Lighthouse
-need Chromium's DevTools port on 127.0.0.1), and Chromium follows a
-redirect from the audited site, and loads third-party hosts, with no
-per-request guard. Every run reports this in ``warnings``. With a trusted proxy
-(``CLAUDE_SEO_TRUST_PROXY``) there is no local resolver to rebind and
-neither pin is applied, as in the other browser paths.
+With a trusted proxy (``CLAUDE_SEO_TRUST_PROXY``) there is no local resolver
+to rebind and neither guard is applied, as in the other browser paths; the
+run then reports that in ``warnings``. Requests the guards refused are listed
+in ``blocked_requests``.
 
 Prerequisites
 =============
@@ -89,6 +92,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -114,6 +118,7 @@ from sitemap_discovery import (  # noqa: E402
 )
 from url_safety import (  # noqa: E402
     PROXY_RESOLVES,
+    EgressGuardProxy,
     URLSafetyError,
     chromium_launch_args,
     normalize_hostname,
@@ -124,12 +129,13 @@ UNLIGHTHOUSE_PIN = "unlighthouse@0.13.5"
 NODE_NET_GUARD = Path(_SCRIPTS_DIR) / "node_net_guard.cjs"
 MAX_HOMEPAGE_BYTES = 5 * 1024 * 1024
 
-RESIDUAL_RISK_WARNING = (
-    "unlighthouse: the audited host is DNS-pinned and only same-origin URLs are "
-    "scanned, but Chromium follows a redirect from the site to another host or a "
-    "private IP without re-validation, and Node can still reach loopback. Only "
-    "audit sites you trust (see SECURITY.md)."
+UNGUARDED_WARNING = (
+    "unlighthouse: a trusted proxy (CLAUDE_SEO_TRUST_PROXY) resolves the target, "
+    "so neither the Chromium egress proxy nor the Node guard is applied and the "
+    "proxy decides what the scan can reach. Only audit sites you trust (see "
+    "SECURITY.md)."
 )
+MAX_REPORTED_BLOCKS = 50
 # Proxies npm (npx) may connect through; the Node guard must not block them.
 # Matched case-insensitively: Windows upper-cases every os.environ key.
 _PROXY_ENV_KEYS = frozenset({
@@ -289,8 +295,8 @@ def build_guard_env(target: str, pinned_ip: str, base_env: dict[str, str]) -> di
     """Environment that preloads ``node_net_guard.cjs`` into every Node process.
 
     Returns ``base_env`` unchanged when a trusted proxy resolves the target
-    (``PROXY_RESOLVES``): there is no local resolver to rebind. The proxy
-    hosts npm may need are passed as ``CLAUDE_SEO_NET_ALLOW``.
+    (``PROXY_RESOLVES``): there is no local resolver to rebind. The proxies
+    npm may need are passed as ``host:port`` in ``CLAUDE_SEO_NET_ALLOW``.
     """
     env = dict(base_env)
     if pinned_ip == PROXY_RESOLVES:
@@ -304,14 +310,22 @@ def build_guard_env(target: str, pinned_ip: str, base_env: dict[str, str]) -> di
     for key, value in env.items():
         if key.lower() not in _PROXY_ENV_KEYS or not value:
             continue
-        proxy_host = urlparse(value if "://" in value else f"http://{value}").hostname
-        if proxy_host:
-            allow.add(proxy_host.lower())
+        proxy = urlparse(value if "://" in value else f"http://{value}")
+        try:
+            proxy_port = proxy.port or (443 if proxy.scheme == "https" else 80)
+        except ValueError:
+            continue
+        if proxy.hostname:
+            # host:port, not the host alone: a proxy on a private or loopback
+            # address must not open that machine's other ports to the crawl.
+            allow.add(f"{proxy.hostname.lower()}:{proxy_port}")
     require = node_require_option(NODE_NET_GUARD)
     env["NODE_OPTIONS"] = f"{env.get('NODE_OPTIONS', '')} {require}".strip()
     env["CLAUDE_SEO_NET_GUARD"] = "1"
     env["CLAUDE_SEO_PIN_HOST"] = host
     env["CLAUDE_SEO_PIN_IP"] = pinned_ip
+    parsed = urlparse(target)
+    env["CLAUDE_SEO_PIN_PORT"] = str(parsed.port or (443 if parsed.scheme == "https" else 80))
     env["CLAUDE_SEO_NET_ALLOW"] = ",".join(sorted(allow))
     return env
 
@@ -427,11 +441,14 @@ def run(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     urls = discover_routes(target, max_routes)
-    config = build_config(max_routes, page_timeout * 1000, chromium_args, urls=urls)
-    config_path = write_config_file(out_dir, config)
-    cmd = build_cmd(target, device=device, out_dir=out_dir, config_path=config_path)
-
+    guarded = pinned_ip != PROXY_RESOLVES
+    proxy = EgressGuardProxy(target, pinned_ip).start() if guarded else None
     try:
+        if proxy is not None:
+            chromium_args = [*chromium_args, *proxy.chromium_args()]
+        config = build_config(max_routes, page_timeout * 1000, chromium_args, urls=urls)
+        config_path = write_config_file(out_dir, config)
+        cmd = build_cmd(target, device=device, out_dir=out_dir, config_path=config_path)
         proc = subprocess.run(
             cmd,
             capture_output=True,
@@ -447,6 +464,12 @@ def run(
                 "output_dir": str(out_dir)}
     except FileNotFoundError as exc:
         return {"ok": False, "error": f"npx invocation failed: {exc}"}
+    finally:
+        if proxy is not None:
+            proxy.stop()
+    blocked = list(proxy.refused) if proxy is not None else []
+    blocked += sorted(set(re.findall(r"claude-seo net guard: [^\n]*?is not a public address",
+                                     proc.stderr or "")))
 
     summary_path = out_dir / "ci-result.json"
     normalized: dict[str, Any] = {"routes": [], "route_count": 0, "aggregate_scores": {}}
@@ -471,7 +494,8 @@ def run(
         "stdout_tail": proc.stdout[-2000:] if proc.stdout else "",
         "stderr_tail": proc.stderr[-2000:] if proc.stderr else "",
         "scanned_urls": len(urls),
-        "warnings": [RESIDUAL_RISK_WARNING],
+        "blocked_requests": blocked[:MAX_REPORTED_BLOCKS],
+        "warnings": [] if guarded else [UNGUARDED_WARNING],
     }
 
 

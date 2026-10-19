@@ -201,7 +201,7 @@ def _mock_run_env(monkeypatch, pinned_ip="93.184.216.34"):
     return calls
 
 
-def test_run_hands_unlighthouse_the_url_list_and_reports_the_residual_risk(monkeypatch, tmp_path):
+def test_run_hands_unlighthouse_the_url_list_behind_the_egress_proxy(monkeypatch, tmp_path):
     calls = _mock_run_env(monkeypatch)
     result = ul.run("https://example.com/", output_dir=str(tmp_path), max_routes=5)
 
@@ -209,10 +209,14 @@ def test_run_hands_unlighthouse_the_url_list_and_reports_the_residual_risk(monke
     config_text = (tmp_path / "unlighthouse.config.mjs").read_text(encoding="utf-8")
     config = json.loads(config_text.removeprefix("export default ").strip())
     assert config["urls"] == ["https://example.com/", "https://example.com/a"]
-    assert config["puppeteerOptions"]["args"] == [PIN_RULE]
+    args = config["puppeteerOptions"]["args"]
+    assert args[0] == PIN_RULE
+    assert any(arg.startswith("--proxy-server=http://127.0.0.1:") for arg in args)
+    assert "--proxy-bypass-list=<-loopback>" in args
     assert result["ok"] is True
     assert result["scanned_urls"] == 2
-    assert result["warnings"] == [ul.RESIDUAL_RISK_WARNING]
+    assert result["warnings"] == []
+    assert result["blocked_requests"] == []
 
 
 def test_run_refuses_an_unpinnable_target_before_any_subprocess(monkeypatch, tmp_path):

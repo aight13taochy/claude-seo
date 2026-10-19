@@ -145,7 +145,7 @@ claude-seo/
     indexnow_submit.py           # IndexNow submitter
     ucp_check.py                 # UCP (Universal Commerce Protocol) profile auditor
     unlighthouse_run.py          # Unlighthouse CLI wrapper (site-wide Lighthouse)
-    node_net_guard.cjs           # Node preload: DNS pin + non-public connection refusal (unlighthouse)
+    node_net_guard.cjs           # Node preload: DNS pin, non-public + loopback refusal except DevTools (unlighthouse)
     validate_backlink_report.py  # Backlink report validation
     portability_check.py         # Cross-platform portability lint for SKILL.md files
     consistency_check.py         # Reference-graph gate: dead refs, routing, lock, orphans
@@ -220,7 +220,7 @@ claude-seo/
 ## Security Rules
 
 - **Never commit credentials**: `.env`, `client_secret*.json`, `oauth-token.json`, `service_account*.json` are all in `.gitignore`
-- **URL validation**: All URL handling goes through `scripts/url_safety.py`, never `google_auth.py` (its `validate_url` is a deprecated alias, not an SSRF guard). A script that opens a socket calls `validate_url_strict()`, then fetches with the `safe_requests_get/head/session()` helpers; Chromium is launched with `args=chromium_launch_args(url, pinned_ip)` and gets `make_safe_playwright_route_handler(top_level_url=url)`, whose `guard_browser(browser)` runs right after launch so redirect hops are judged before they are sent. A third-party Node tool that crawls the URL itself (unlighthouse) gets the same pin: Chromium args in its config and `scripts/node_net_guard.cjs` preloaded via `NODE_OPTIONS`. A URL only handed to a third-party API that fetches it (PageSpeed, CrUX, Search Console) needs just the parse-time `validate_url()`. This blocks private IPs, loopback, metadata endpoints, redirect rebinding, and DNS rebinding. `tests/test_url_safety_entrypoints.py` enforces the import and Chromium rules.
+- **URL validation**: All URL handling goes through `scripts/url_safety.py`, never `google_auth.py` (its `validate_url` is a deprecated alias, not an SSRF guard). A script that opens a socket calls `validate_url_strict()`, then fetches with the `safe_requests_get/head/session()` helpers; Chromium is launched with `args=chromium_launch_args(url, pinned_ip)` and gets `make_safe_playwright_route_handler(top_level_url=url)`, whose `guard_browser(browser)` runs right after launch so redirect hops are judged before they are sent. A third-party Node tool that crawls the URL itself (unlighthouse) gets the same protection: its Chromium sends all traffic through `url_safety.EgressGuardProxy` (args in its config), and `scripts/node_net_guard.cjs` is preloaded via `NODE_OPTIONS`. A URL only handed to a third-party API that fetches it (PageSpeed, CrUX, Search Console) needs just the parse-time `validate_url()`. This blocks private IPs, loopback, metadata endpoints, redirect rebinding, and DNS rebinding. `tests/test_url_safety_entrypoints.py` enforces the import and Chromium rules.
 - **OAuth tokens**: Never store `client_secret` in the token file. Read it from the client_secret.json file at runtime.
 - **No hardcoded paths**: Use `os.path.dirname(os.path.abspath(__file__))` for relative paths, never a user-specific absolute path
 - **Config location**: `~/.config/claude-seo/google-api.json` and `~/.config/claude-seo/backlinks-api.json` (user-space, not in repo)

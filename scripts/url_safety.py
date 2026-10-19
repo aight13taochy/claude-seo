@@ -140,6 +140,7 @@ __all__ = [
     "safe_requests_session",
     "make_safe_playwright_route_handler",
     "chromium_launch_args",
+    "EgressGuardProxy",
     "DEFAULT_USER_AGENT",
     "DEFAULT_REQUEST_HEADERS",
 ]
@@ -1348,6 +1349,260 @@ def chromium_launch_args(url: str, pinned_ip: str) -> list[str]:
     if not _RESOLVER_RULE_HOST_RE.match(host):
         raise URLSafetyError(f"Hostname cannot be pinned in Chromium: {host!r}")
     return [f"--host-resolver-rules=MAP {host} {pinned_ip}"]
+
+
+# ---------------------------------------------------------------------------
+# Egress proxy for browsers this module cannot hook
+# ---------------------------------------------------------------------------
+#
+# Playwright scripts judge every request in a route handler. A browser driven
+# by a third-party tool (unlighthouse's Puppeteer, and the Lighthouse runs
+# that attach to it) offers no such hook, so its Chromium is pointed at this
+# proxy instead: every HTTP request and HTTPS tunnel goes through it, and it
+# resolves the host itself, refuses a non-public address, and connects to the
+# address it just checked. There is no second resolution for a rebinding
+# answer to win, and redirects, popups, third-party subresources and Lighthouse
+# navigations all reach it as new requests.
+
+_PROXY_HEAD_LIMIT = 64 * 1024
+_PROXY_IDLE_TIMEOUT = 60.0
+_HOP_BY_HOP = frozenset({"connection", "proxy-connection", "keep-alive", "proxy-authorization"})
+
+
+def _split_authority(authority: str, default_port: int) -> tuple[str, int]:
+    """``host[:port]`` or ``[v6][:port]`` -> ``(host, port)``; raises ValueError."""
+    if authority.startswith("["):
+        end = authority.index("]")
+        host, rest = authority[1:end], authority[end + 1:]
+        port = int(rest[1:]) if rest.startswith(":") else default_port
+    elif authority.count(":") == 1:
+        host, port_text = authority.split(":")
+        port = int(port_text)
+    else:
+        host, port = authority, default_port
+    if not host or not 0 < port < 65536:
+        raise ValueError(f"bad authority {authority!r}")
+    return host, port
+
+
+class EgressGuardProxy:
+    """A local HTTP proxy that only lets a browser reach public addresses.
+
+    Start it, launch Chromium with :meth:`chromium_args`, stop it when the
+    browser is done (``with EgressGuardProxy(url, pinned_ip) as proxy:``).
+    The audited origin (exact host and port) connects to ``pinned_ip``, the
+    address :func:`validate_url_strict` validated, even when that address is
+    an allowlisted local target; every other request must resolve to public
+    addresses only (:func:`is_safe_ip`) and connects to the first of them.
+    Refused requests get a ``403`` and the reason is kept in :attr:`refused`.
+
+    Plain-HTTP requests are forwarded one per connection (``Connection:
+    close``) so a reused browser connection can never carry a request for one
+    host to another host's socket. Not used when a trusted proxy resolves the
+    target (``pinned_ip == PROXY_RESOLVES``): there is no local resolver.
+    """
+
+    def __init__(self, url: str, pinned_ip: str) -> None:
+        parsed = urlparse(url)
+        if not parsed.hostname:
+            raise URLSafetyError("URL has no hostname")
+        try:
+            ipaddress.ip_address(pinned_ip)
+        except ValueError as exc:
+            raise URLSafetyError(f"Pinned address is not an IP literal: {pinned_ip!r}") from exc
+        self._pin_host = normalize_hostname(parsed.hostname)
+        self._pin_port = _url_port(parsed)
+        self._pin_ip = pinned_ip
+        self.refused: list[str] = []
+        self._server: Optional[socket.socket] = None
+        self._threads: list[threading.Thread] = []
+        self._closing = threading.Event()
+        self.port = 0
+
+    # -- policy ------------------------------------------------------------
+
+    def resolve(self, host: str, port: int) -> str:
+        """The address to connect to for ``host:port``; raises URLSafetyError."""
+        host = normalize_hostname(host)
+        if host == self._pin_host:
+            # The audited host never re-resolves. A non-public pin exists only
+            # because CLAUDE_SEO_LOCAL_TARGETS named that origin: its port only.
+            if port == self._pin_port or is_safe_ip(self._pin_ip):
+                return self._pin_ip
+            raise URLSafetyError(f"{host}:{port} is not the audited origin")
+        if host in _BLOCKED_HOSTNAMES:
+            raise URLSafetyError(f"Blocked hostname: {host}")
+        if _looks_like_ip(host):
+            if not is_safe_ip(host):
+                raise URLSafetyError(f"Non-public address: {host}")
+            return host
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise URLSafetyError(f"DNS resolution failed for {host}") from exc
+        ips = [info[4][0] for info in infos]
+        bad = [ip for ip in ips if not is_safe_ip(ip)]
+        if not ips or bad:
+            raise URLSafetyError(f"{host} resolves to non-public {bad or 'nothing'}")
+        return ips[0]
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def start(self) -> "EgressGuardProxy":
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(128)
+        self._server = server
+        self.port = server.getsockname()[1]
+        thread = threading.Thread(target=self._accept_loop, name="egress-guard", daemon=True)
+        thread.start()
+        self._threads.append(thread)
+        return self
+
+    def stop(self) -> None:
+        self._closing.set()
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+            self._server = None
+
+    def __enter__(self) -> "EgressGuardProxy":
+        return self.start()
+
+    def __exit__(self, *_exc) -> None:
+        self.stop()
+
+    def chromium_args(self) -> list[str]:
+        """Route all of Chromium's traffic, loopback included, through the proxy.
+
+        ``<-loopback>`` removes Chromium's implicit proxy bypass for
+        localhost and 127.0.0.1, and WebRTC may not send UDP around it.
+        """
+        return [
+            f"--proxy-server=http://127.0.0.1:{self.port}",
+            "--proxy-bypass-list=<-loopback>",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ]
+
+    # -- connection handling -----------------------------------------------
+
+    def _accept_loop(self) -> None:
+        while not self._closing.is_set():
+            try:
+                client, _addr = self._server.accept()  # type: ignore[union-attr]
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(client,), daemon=True).start()
+
+    def _refuse(self, client: socket.socket, target: str, reason: str) -> None:
+        self.refused.append(f"{target}: {reason}")
+        try:
+            client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        except OSError:
+            pass
+
+    def _serve(self, client: socket.socket) -> None:
+        upstream: Optional[socket.socket] = None
+        try:
+            client.settimeout(_PROXY_IDLE_TIMEOUT)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = client.recv(65536)
+                if not chunk:
+                    return
+                data += chunk
+                if len(data) > _PROXY_HEAD_LIMIT:
+                    return
+            head, rest = data.split(b"\r\n\r\n", 1)
+            lines = head.decode("latin-1").split("\r\n")
+            method, target, version = lines[0].split(" ", 2)
+
+            if method.upper() == "CONNECT":
+                host, port = _split_authority(target, 443)
+            else:
+                parsed = urlparse(target)
+                if parsed.scheme != "http" or not parsed.hostname:
+                    self._refuse(client, target, "only absolute http:// URLs are proxied")
+                    return
+                host, port = parsed.hostname, _url_port(parsed)
+
+            try:
+                ip = self.resolve(host, port)
+            except (URLSafetyError, ValueError) as exc:
+                self._refuse(client, f"{host}:{port}", str(exc))
+                return
+            upstream = socket.create_connection((ip, port), timeout=_PROXY_IDLE_TIMEOUT)
+
+            if method.upper() == "CONNECT":
+                client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                if rest:
+                    upstream.sendall(rest)
+                self._pipe(client, upstream, rewrite_response=False)
+                return
+
+            path = parsed.path or "/"
+            if parsed.query:
+                path += "?" + parsed.query
+            headers = [
+                line for line in lines[1:]
+                if line and line.split(":", 1)[0].strip().lower() not in _HOP_BY_HOP
+            ]
+            request = "\r\n".join([f"{method} {path} {version}", *headers, "Connection: close"])
+            upstream.sendall(request.encode("latin-1") + b"\r\n\r\n" + rest)
+            self._pipe(client, upstream, rewrite_response=True)
+        except (OSError, ValueError):
+            pass
+        finally:
+            for sock in (client, upstream):
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+
+    @staticmethod
+    def _close_response_head(data: bytes) -> bytes:
+        """Mark the first response head ``Connection: close`` so it is not reused."""
+        head, sep, body = data.partition(b"\r\n\r\n")
+        if not sep:
+            return data
+        lines = [
+            line for line in head.split(b"\r\n")
+            if line.split(b":", 1)[0].strip().lower().decode("latin-1") not in _HOP_BY_HOP
+        ]
+        return b"\r\n".join([*lines, b"Connection: close"]) + sep + body
+
+    def _pipe(self, client: socket.socket, upstream: socket.socket, *, rewrite_response: bool) -> None:
+        import selectors
+
+        selector = selectors.DefaultSelector()
+        selector.register(client, selectors.EVENT_READ, upstream)
+        selector.register(upstream, selectors.EVENT_READ, client)
+        pending_head = rewrite_response
+        buffered = b""
+        try:
+            while not self._closing.is_set():
+                events = selector.select(timeout=_PROXY_IDLE_TIMEOUT)
+                if not events:
+                    return
+                for key, _mask in events:
+                    source: socket.socket = key.fileobj  # type: ignore[assignment]
+                    data = source.recv(65536)
+                    if not data:
+                        if buffered:
+                            client.sendall(buffered)
+                        return
+                    if source is upstream and pending_head:
+                        buffered += data
+                        if b"\r\n\r\n" not in buffered and len(buffered) < _PROXY_HEAD_LIMIT:
+                            continue
+                        data, buffered, pending_head = self._close_response_head(buffered), b"", False
+                    key.data.sendall(data)
+        finally:
+            selector.close()
 
 
 def _cli() -> None:

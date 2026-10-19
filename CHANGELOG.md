@@ -233,6 +233,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `/seo unlighthouse` closes its two remaining SSRF gaps, both reproduced
+  against unlighthouse 0.13.5 with a page that loads an image from, and
+  redirects to, another local port. Chromium (Puppeteer and every Lighthouse
+  run) loaded third-party subresources and followed redirects unchecked: its
+  traffic now goes through the new `url_safety.EgressGuardProxy`, which
+  resolves each host itself, refuses non-public addresses and connects to the
+  address it checked (`--proxy-bypass-list=<-loopback>` keeps localhost from
+  bypassing it). The Node guard allowed every loopback port, and allowed a
+  configured proxy's whole host: it now judges each connection on address
+  and port, keeps loopback to the DevTools ports of the scan's own Chromium
+  instances, and allows proxies on their own `host:port` only (in a sandbox
+  whose proxy listens on 127.0.0.1, the host-only rule had opened every
+  local port). Refused requests are reported in `blocked_requests`; the
+  standing residual-risk warning now appears only in trusted-proxy mode.
+
 - A page audited by `render_page.py`, `capture_screenshot.py` or
   `analyze_visual.py` could reach private addresses through a popup.
   Playwright disables Chromium's popup blocker, so `window.open()` needs no
