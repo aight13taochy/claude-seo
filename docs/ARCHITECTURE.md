@@ -289,6 +289,15 @@ extensions/
 │   ├── uninstall.ps1
 │   └── skills/seo-firecrawl/SKILL.md
 │
+├── scrapegraphai/            # ScrapeGraphAI MCP for LLM extraction + AI crawling
+│   ├── README.md
+│   ├── install.sh
+│   ├── install.ps1
+│   ├── uninstall.sh
+│   ├── uninstall.ps1
+│   ├── skills/seo-scrapegraphai/SKILL.md
+│   └── docs/SCRAPEGRAPHAI-SETUP.md
+│
 ├── ahrefs/                   # Ahrefs MCP for backlinks + organic data
 │   ├── install.sh
 │   ├── install.ps1
@@ -332,6 +341,7 @@ extensions/
 | **DataForSEO** | `dataforseo-mcp-server@2.8.10` | Live SERP data, keyword research, backlinks, on-page analysis, business listings, AI visibility, LLM mention tracking |
 | **Banana Image Gen** | `@ycse/nanobanana-mcp@1.1.1` | AI image generation for SEO assets via Gemini (OG images, hero images, product photos, infographics, batch) |
 | **Firecrawl** | `firecrawl-mcp@3.11.0` | Full-site crawling and URL discovery for audits |
+| **ScrapeGraphAI** | `scrapegraph-mcp==1.0.1` (PyPI, isolated venv) | Prompt-driven structured extraction, search plus extraction, markdown conversion, async AI crawling, agentic browsing |
 | **Ahrefs** | `@ahrefs/mcp@0.0.11` | Backlinks and organic keyword data via the official `@ahrefs/mcp` server |
 | **SE Ranking** | SE Ranking API | AI Share-of-Voice across ChatGPT, Gemini, Perplexity, AI Overviews, and AI Mode |
 | **Profound** | Profound API | LLM citation tracking with time-series data |

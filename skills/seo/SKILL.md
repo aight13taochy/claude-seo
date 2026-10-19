@@ -59,6 +59,7 @@ extension is also installable (see "Optional Extensions" below).
 | `/seo ecommerce <url>` | E-commerce SEO: product schema, marketplace intelligence |
 | `/seo matomo [command] [args]` | Matomo Reporting API: GA4 alternative or supplement (extension) |
 | `/seo firecrawl [command] <url>` | Full-site crawling and site mapping (extension) |
+| `/seo scrapegraphai [command] <url\|query>` | LLM-powered scraping, structured extraction, search, and crawling via ScrapeGraphAI (extension) |
 | `/seo dataforseo [command]` | Live SEO data via DataForSEO (extension) |
 | `/seo image-gen [use-case] <description>` | AI image generation for SEO assets (extension) |
 | `/seo flow [stage] [url\|topic]` | FLOW framework: evidence-led prompts for Find, Leverage, Optimize, Win, or Local stages |
@@ -270,8 +271,8 @@ installer to activate (see each extension's `install.sh`/`install.ps1`):
 
 All optional extensions are reachable through `/seo` subcommands once
 installed: firecrawl, dataforseo, and image-gen, plus `/seo ahrefs`,
-`/seo bing`, `/seo matomo`, `/seo profound`, `/seo seranking`, and
-`/seo unlighthouse`. Each installs as its own sub-skill, so the model also
+`/seo bing`, `/seo matomo`, `/seo profound`, `/seo scrapegraphai`,
+`/seo seranking`, and `/seo unlighthouse`. Each installs as its own sub-skill, so the model also
 auto-routes to their descriptions without the `/seo` prefix.
 
 - **seo-firecrawl** -- Full-site crawling and site mapping via Firecrawl MCP. Install
@@ -283,6 +284,10 @@ auto-routes to their descriptions without the `/seo` prefix.
   (Windows). Once installed, invoke via `/seo matomo <command>` or rely
   on the audit orchestrator to spawn the seo-matomo agent automatically
   when credentials are present.
+- **seo-scrapegraphai** -- LLM-powered scraping, prompt-driven extraction, search, and
+  crawling via the ScrapeGraphAI MCP server (Python). Install via
+  `extensions/scrapegraphai/install.sh` (Unix) or `extensions/scrapegraphai/install.ps1`
+  (Windows). Once installed, invoke via `/seo scrapegraphai <command>`.
 
 ## Subagents
 

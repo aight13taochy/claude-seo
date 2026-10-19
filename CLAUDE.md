@@ -155,6 +155,7 @@ claude-seo/
   extensions/                      # Optional add-on install helpers
     dataforseo/                  # DataForSEO MCP install scripts
     firecrawl/                   # Firecrawl MCP install scripts
+    scrapegraphai/               # ScrapeGraphAI MCP install scripts (Python venv)
     banana/                      # Banana MCP install scripts
     ahrefs/                      # Ahrefs MCP install scripts
     bing-webmaster/              # Bing Webmaster and IndexNow install scripts
@@ -195,6 +196,7 @@ claude-seo/
 | `/seo dataforseo [command]` | Live SEO data (extension) |
 | `/seo image-gen [use-case] <desc>` | AI image generation (extension) |
 | `/seo firecrawl [command] <url>` | Full-site crawling (extension) |
+| `/seo scrapegraphai [command] <url\|query>` | LLM-powered scraping, extraction, search, and crawling via ScrapeGraphAI (extension) |
 | `/seo ahrefs [command] <url>` | Backlinks, organic keywords, and content data via the official Ahrefs MCP (extension) |
 | `/seo seranking [command]` | AI Share-of-Voice across ChatGPT, Gemini, Perplexity, AI Overviews, AI Mode (extension) |
 | `/seo profound [command]` | LLM citation tracking with time-series data (extension) |
@@ -247,7 +249,7 @@ Part of the Claude Code skill family:
 1. **Progressive Disclosure**: Metadata always loaded, instructions on activation, resources on demand
 2. **Industry Detection**: Auto-detect SaaS, e-commerce, local, publisher, agency
 3. **Parallel Execution**: Full audits spawn up to 17 subagents simultaneously
-4. **Extension System**: DataForSEO, Firecrawl, Banana, Ahrefs, SE Ranking, Profound, Bing Webmaster, and Unlighthouse extensions
+4. **Extension System**: DataForSEO, Firecrawl, ScrapeGraphAI, Banana, Ahrefs, SE Ranking, Profound, Bing Webmaster, Matomo, and Unlighthouse extensions
 
 ## Repository Topology (public + private)
 

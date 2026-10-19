@@ -673,6 +673,21 @@ Live SEO data via DataForSEO MCP server (extension). 23 data commands across 9 A
 
 ---
 
+### `/seo scrapegraphai [command] <url|query>`
+
+LLM-powered scraping and extraction via the ScrapeGraphAI MCP server (extension). **Prerequisites:** ScrapeGraphAI extension installed (`./extensions/scrapegraphai/install.sh`), Python 3.10+.
+```
+/seo scrapegraphai markdown <url>                 # Clean markdown of one page (2 credits)
+/seo scrapegraphai extract <url> "<prompt>"       # Structured extraction with prompt, optional JSON schema (10 credits)
+/seo scrapegraphai search "<query>"               # Web search plus extraction from top results (10 credits/site)
+/seo scrapegraphai crawl <url> ["<prompt>"]       # Async multi-page crawl, markdown or AI mode
+/seo scrapegraphai sitemap <url>                  # URL inventory from the sitemap (1 credit)
+/seo scrapegraphai scrape <url>                   # Rendered HTML, optional heavy JS (1 credit)
+/seo scrapegraphai agent <url> "<prompt>"         # Multi-step browser automation then extraction
+```
+
+---
+
 ### `/seo ahrefs [command] <url|topic>`
 
 Ahrefs API metrics (extension). **Prerequisites:** Ahrefs extension installed (`./extensions/ahrefs/install.sh`).
@@ -785,6 +800,7 @@ Multi-page Lighthouse audit via Unlighthouse (extension, MIT, no API quota). **P
 | `/seo dataforseo [command]` | Live SEO data (extension) |
 | `/seo image-gen [use-case] <desc>` | AI image generation (extension) |
 | `/seo firecrawl [command] <url>` | Full-site crawling (extension) |
+| `/seo scrapegraphai [command] <url\|query>` | LLM-powered scraping, extraction, search, and crawling (extension) |
 | `/seo ahrefs [command] <url>` | Backlinks, organic keywords, and content data via the official Ahrefs MCP (extension) |
 | `/seo seranking [command]` | AI Share-of-Voice across ChatGPT, Gemini, Perplexity, AI Overviews, AI Mode (extension) |
 | `/seo profound [command]` | LLM citation tracking with time-series data (extension) |

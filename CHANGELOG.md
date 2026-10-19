@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handler also judges IP literals without a resolver. Unset, behaviour is
   unchanged. Documented in SECURITY.md.
 
+- ScrapeGraphAI extension (`extensions/scrapegraphai/`): installs the official
+  `scrapegraph-mcp` Python server into an isolated venv, registers it in
+  `~/.claude.json`, and exposes `/seo scrapegraphai` for prompt-driven
+  extraction, search, markdown conversion, async AI crawling, and agentic
+  browsing.
+
 ## [2.4.2] - 2026-10-04
 
 seo-cockpit, Google sign-in through your own account, and a schema-hook fix.

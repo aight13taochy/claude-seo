@@ -91,6 +91,7 @@ integration + 2 extension mirrors), and 60 Python execution scripts.
 | `/seo dataforseo [cmd]` | Live SEO data via DataForSEO (extension) |
 | `/seo image-gen [use-case]` | AI image generation for SEO assets (extension) |
 | `/seo firecrawl [cmd] <url>` | Full-site crawling and site mapping (extension) |
+| `/seo scrapegraphai [cmd] <url\|query>` | LLM-powered scraping, extraction, search, and crawling (extension) |
 | `/seo ahrefs [cmd] <target>` | Ahrefs backlink and keyword data (extension) |
 | `/seo bing [cmd] <url>` | Bing Webmaster data and IndexNow (extension) |
 | `/seo profound [cmd]` | LLM brand-citation tracking (extension) |
@@ -169,7 +170,7 @@ skills/                    # 26 sub-skills (auto-discovered)
 agents/                    # 19 subagents
 scripts/                   # 60 Python scripts, including the managed runtime
 schema/                    # JSON-LD templates
-extensions/                # 9 MCP extensions: DataForSEO, Firecrawl, Banana, Ahrefs, SE Ranking, Profound, Bing Webmaster, Matomo, Unlighthouse
+extensions/                # 10 MCP extensions: DataForSEO, Firecrawl, ScrapeGraphAI, Banana, Ahrefs, SE Ranking, Profound, Bing Webmaster, Matomo, Unlighthouse
 ```
 
 ## Key Principles
