@@ -35,7 +35,7 @@ metadata:
    - `seo-sxo` -- Search experience analysis: page-type mismatch, user stories, persona scoring (always include in full audits)
    - `seo-drift` -- Drift analysis: compare against stored baseline (spawn when drift baseline exists for the URL via `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run drift_history.py <url>`)
    - `seo-ecommerce` -- Product schema, marketplace intelligence (spawn when E-commerce industry detected)
-5. **Score** -- write each category's 0-100 score into `audit-data.json`, then run `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run audit_score.py {domain}-audit/audit-data.json --write` to set the SEO Health Score (0-100). Do not compute the headline by hand: the script applies the weights below, rescales them when a category could not be scored, and reports that coverage
+5. **Score** -- for every crawled page, save the HTML (`render_page.py <url> --output page.html`) and run `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run parse_html.py page.html --url <url> --json`, writing each result to `{domain}-audit/pages/<slug>.json`. Then run `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run onpage_score.py {domain}-audit/pages/*.json --write {domain}-audit/audit-data.json`: no subagent scores On-Page SEO or Images, so this script does, from fixed checks listed in `references/score-criteria.md`. Write the other categories' 0-100 scores (Content Quality comes from `seo-content`, already adjusted by `content_score.py`) into `audit-data.json`, then run `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run audit_score.py {domain}-audit/audit-data.json --write` to set the SEO Health Score (0-100). Do not compute the headline by hand: the script applies the weights below, rescales them when a category could not be scored, and reports that coverage
 6. **Persist audit artifacts** -- write all outputs under `{domain}-audit/`
 7. **Report** -- generate prioritized action plan and optional PDF/HTML report
 
@@ -103,7 +103,7 @@ Write `{domain}-audit/audit-data.json` with this shape so `"${CLAUDE_PLUGIN_ROOT
 
 ## Scoring Weights
 
-`audit_score.py` owns these weights; this table restates them and a test keeps the two in step. Only these seven categories count toward the SEO Health Score. Categories such as Backlink Profile, Local SEO or Search Experience appear in the report but do not move the score. Use these category names in `audit-data.json` so the script can match them.
+`audit_score.py` owns these weights; `references/score-criteria.md` defines how On-Page SEO, Images and the Content Quality adjustment are scored. This table restates the weights and a test keeps the two in step. Only these seven categories count toward the SEO Health Score. Categories such as Backlink Profile, Local SEO or Search Experience appear in the report but do not move the score. Use these category names in `audit-data.json` so the script can match them.
 
 | Category | Weight |
 |----------|--------|

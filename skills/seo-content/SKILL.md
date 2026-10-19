@@ -144,8 +144,8 @@ Run both detectors on the page's main text before scoring. For a URL, save
 and cookie banners are already stripped); for a draft, use the user's file.
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_quality.py page.txt --json
-"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_verify.py page.txt --json
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_quality.py page.txt --json > quality.json
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_verify.py page.txt --json > verify.json
 ```
 
 1. **`content_quality.py`** scores filler, AI-typical phrasing, information
@@ -162,6 +162,20 @@ and cookie banners are already stripped); for a draft, use the user's file.
 Both scripts exit 1 when the text crosses their `--threshold` (quality below
 60, uncited ratio above 0.4). That is a finding, not a failure: read the JSON
 either way.
+
+3. **`content_score.py`** is the only step where these detectors move the
+   number. Score the E-E-A-T rows from reading the page, without deducting
+   for the flags above, then pass that total as the base:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_score.py --base <reading score> --quality quality.json --verify verify.json --lang <html lang> --json
+   ```
+
+   `adjusted_score` is the Content Quality score. It subtracts at most 15
+   points (AI phrasing -4, filler -3, repetition -3, low density -2,
+   uncited claims -3 or -6), never adds any, and skips a signal where it is
+   noise (non-English page, under 300 tokens, under 3 claims). Criteria and
+   reasons: `${CLAUDE_PLUGIN_ROOT}/skills/seo-audit/references/score-criteria.md`.
 
 Scope honesty: both are deterministic heuristics with known false negatives.
 The phrase lists are English-only and incomplete (new wordings slip through).
@@ -268,6 +282,7 @@ drawing conclusions. A date overlap is a hypothesis, never proof of cause.
 |----------|--------|
 | `content_quality.py` | overall_quality XX/100, flags |
 | `content_verify.py` | N of M claims uncited (quote them) |
+| `content_score.py` | base XX, penalties applied, adjusted XX/100 |
 
 ### Issues Found
 ### Recommendations

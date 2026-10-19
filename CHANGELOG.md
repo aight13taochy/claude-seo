@@ -47,6 +47,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full` fills a missing headline from the categories, and warns on stderr
   when the declared score is more than 2 points off, without rewriting it.
 
+- `scripts/onpage_score.py`: scores On-Page SEO (20% of the SEO Health
+  Score) and Images (5%) from `parse_html.py` output. No subagent owned
+  these two categories, so their scores were whatever the orchestrator
+  wrote. The script runs 11 fixed on-page checks (title and description
+  presence, length and uniqueness, one H1, H2s on long pages, templated
+  metadata, internal links, Open Graph) and 7 image checks (alt presence
+  and length, width/height, WebP/AVIF/SVG, lazy-loading below the fold but
+  not on the first image, descriptive file names), each with a weight, a
+  severity and a fix. `--write` merges both categories into
+  `audit-data.json`, keeping findings an agent already wrote. `seo-audit`
+  step 5 runs it before `audit_score.py`.
+
+- `scripts/content_score.py`: the one place the content detectors move the
+  Content Quality score. The agent's reading score is the base;
+  `content_quality.py` flags and the `content_verify.py` uncited share
+  subtract an itemised penalty, capped at 15 points, never added, and
+  skipped for non-English pages, texts under 300 tokens and fewer than 3
+  claims. The agent no longer deducts for the same flags in its E-E-A-T
+  rows. Criteria for both scripts (security, reliability, speed,
+  efficiency, no double counting, proportionality, productivity,
+  transparency, reproducibility) are in
+  `skills/seo-audit/references/score-criteria.md`; a test keeps its tables
+  equal to the script weights.
+
 - `tests/test_extension_mirrors.py` and an "Extension Convention" note in
   `docs/ARCHITECTURE.md`: the core copies of the DataForSEO and Banana skill
   and agent were called mirrors but had drifted from the extension copies the
