@@ -299,6 +299,8 @@ Confirmed required fields are `name`, `image`, and `offers`; use `Offer`, not `A
 | **seo-images** | Product image audit (alt text, format, dimensions), plus `DigitalSourceType: TrainedAlgorithmicMedia` IPTC label for AI-generated product images (Merchant Center requirement) |
 | **seo-content** | Product description E-E-A-T and uniqueness analysis |
 | **seo-dataforseo** | Organic keyword rankings for gap analysis |
+| **seo-scrapegraphai** (extension, if installed) | `extract` with a product schema for category-page inventories; `crawl_start` in `links` mode for faceted-navigation and variant-URL audits |
+| **seo-firecrawl** (extension, if installed) | `map` for whole-catalog URL discovery, compared against the product sitemap; `crawl` with `includePaths` such as `/products/*` for a product-section audit |
 | **seo-technical** | Core Web Vitals for product pages (LCP on hero image) |
 | **seo-hreflang** | Region-specific result units: in the EEA, product and (since 2026-09-18) local business queries can show aggregator and supplier units; the EEA, South Africa and Türkiye also have structured data carousels, each with its own eligibility rules (documented 2026-09-08) |
 | **seo-google** | GSC indexation + Performance data for product URLs (NOT Merchant Center feed validation, that is done in Merchant Center / the **Merchant API**; the legacy Content API for Shopping sunsets 2026-08-18) |

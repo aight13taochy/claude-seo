@@ -225,6 +225,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     parse-time `validate_url()`. They now name the strict, DNS-pinned check
     in the script that actually connects (`fetch_page.py`, `render_page.py`).
 
+- `seo-ecommerce` did not list the ScrapeGraphAI and Firecrawl extensions in
+  its cross-skill table, although ScrapeGraphAI documents an integration with
+  it. The table now names both, marked as used only when installed:
+  ScrapeGraphAI for category inventories and faceted-navigation audits,
+  Firecrawl for catalog URL discovery and product-section crawls.
+
 ### Security
 
 - A page audited by `render_page.py`, `capture_screenshot.py` or
