@@ -90,7 +90,7 @@ claude-seo/
     seo-flow.md                  # FLOW framework integration
   hooks/                           # Quality gate hooks
     hooks.json                   # PostToolUse schema validation
-  scripts/                         # 61 Python execution scripts
+  scripts/                         # 63 Python execution scripts
     google_auth.py               # Credential management (OAuth, SA, API key, 4-tier detection)
     backlinks_auth.py            # Backlink API credential management (Moz, Bing)
     moz_api.py                   # Moz Link Explorer API (DA/PA, spam, domains, anchors)
@@ -108,6 +108,7 @@ claude-seo/
     keywordseverywhere_api.py    # Keywords Everywhere (Open PageRank) backlinks fallback
     google_report.py             # PDF/HTML report generator (WeasyPrint + matplotlib)
     audit_score.py               # SEO Health Score recompute from audit-data.json categories
+    onpage_score.py              # Deterministic On-Page SEO + Images category scores from parse_html output
     youtube_search.py            # YouTube Data API v3
     nlp_analyze.py               # Cloud Natural Language API
     keyword_planner.py           # Google Ads Keyword Planner
@@ -135,6 +136,7 @@ claude-seo/
     metadata_template.py         # Templated title/description detector (title echo + stock CTA)
     content_humanize.py          # AI-pattern remover (rewrites AI-typical phrasing)
     content_verify.py            # Claim extractor + citation-gap detector
+    content_score.py             # Bounded penalty from the content detectors onto Content Quality
     schema_generate.py           # JSON-LD generators for high-leverage v2 schema types
     schema_ecommerce_validate.py # Product schema validator (merchant-listing requirements)
     iptc_ai_label.py             # IPTC DigitalSourceType audit/injection for AI imagery

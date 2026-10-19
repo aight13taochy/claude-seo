@@ -32,7 +32,7 @@ ALLOWED_CORE_SCRIPTS = frozenset(
     {
         "agent_ux_check.py", "agentic_check.py", "agentic_fix.py", "analyze_visual.py", "audit_score.py", "backlinks_auth.py",
         "bing_webmaster.py", "capture_screenshot.py", "commoncrawl_graph.py",
-        "content_humanize.py", "content_quality.py", "content_verify.py",
+        "content_humanize.py", "content_quality.py", "content_score.py", "content_verify.py",
         "crux_history.py", "dataforseo_costs.py", "dataforseo_merchant.py",
         "dataforseo_normalize.py", "domain_history.py", "drift_baseline.py",
         "drift_compare.py", "drift_history.py", "drift_report.py", "fetch_page.py",
@@ -41,7 +41,7 @@ ALLOWED_CORE_SCRIPTS = frozenset(
         "indexnow_submit.py", "iptc_ai_label.py", "keyword_planner.py",
         "keywordseverywhere_api.py",
         "lcp_subparts.py", "lighthouse_agentic.py", "matomo_auth.py", "matomo_report.py", "metadata_template.py",
-        "moz_api.py", "nlp_analyze.py", "pagespeed_check.py",
+        "moz_api.py", "nlp_analyze.py", "onpage_score.py", "pagespeed_check.py",
         "parasite_risk.py", "parse_html.py", "preload_check.py", "render_page.py",
         "portability_check.py", "consistency_check.py",
         "schema_ecommerce_validate.py", "schema_generate.py", "seo_updates.py",

@@ -53,8 +53,8 @@ job. `templated_metadata` is a high-severity finding; `description_echoes_title`
 Write `extracted_text` from `render_page.py` to `page.txt`, then run:
 
 ```
-"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_quality.py page.txt --json
-"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_verify.py page.txt --json
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_quality.py page.txt --json > quality.json
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_verify.py page.txt --json > verify.json
 ```
 
 Report `overall_quality` and `flags` from the first, and every uncited claim
@@ -63,6 +63,19 @@ failed. Both are heuristics with known false negatives (English-only,
 incomplete phrase lists; a citation in the claim's sentence is never checked
 against the claim), so a clean result never clears a page and a low score is
 not proof of AI authorship.
+
+Then fold them into the score once, with the reading score (the E-E-A-T rows,
+scored without deducting for these flags) as the base and the page's `html
+lang` as `--lang`:
+
+```
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_score.py --base <reading score> --quality quality.json --verify verify.json --lang <lang> --json
+```
+
+Report `adjusted_score` as the Content Quality score, with each `applied`
+penalty and its fix. Penalties are capped at 15 points and skipped where the
+detectors are unreliable (non-English, under 300 tokens, under 3 claims); see
+`${CLAUDE_PLUGIN_ROOT}/skills/seo-audit/references/score-criteria.md`.
 
 ## E-E-A-T Scoring
 
