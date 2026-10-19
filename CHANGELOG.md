@@ -88,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any nearby link), and the skill's output template gains an Automated Signals
   table.
 
+- `hooks/run-python-hook.js` handed the hook to the next Python candidate on
+  any spawn error, even after the chosen interpreter had passed its probe. A
+  hook could then run under an interpreter that was never selected, or run a
+  second time, and the launcher could still exit 1 instead of the hook's own
+  code. Only `ENOENT` (the interpreter vanished) now falls through; any other
+  spawn error stops with a message naming the interpreter. The intermittent
+  Windows CI timeout in `test_hook_launcher_preserves_blocking_exit_code_two`
+  had that signature (Node exited 1, not 2); this fix is not yet confirmed to
+  end it.
+
 ### Security
 
 - Chromium is launched with `--host-resolver-rules` mapping the audited host

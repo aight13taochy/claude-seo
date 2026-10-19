@@ -50,8 +50,20 @@ function main() {
     const result = spawnSync(candidate.exe, [...candidate.args, hookScript, ...hookArgs], {
       stdio: "inherit",
     });
-    if (result.error) {
+    if (result.error && result.error.code === "ENOENT") {
+      // The interpreter vanished between probe and run, so the hook never
+      // started: trying the next candidate is safe.
       continue;
+    }
+    if (result.error) {
+      // Any other spawn error (EACCES, EPERM, ...) is final. Falling through
+      // handed the hook to the next interpreter, so it ran under one that
+      // had not been chosen, or a second time if the first spawn had
+      // started it before reporting the error.
+      console.error(
+        `Claude SEO hook could not run ${candidate.label}: ${result.error.message}`,
+      );
+      process.exit(1);
     }
     process.exit(result.status === null ? 1 : result.status);
   }
