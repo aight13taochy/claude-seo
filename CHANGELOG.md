@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows installer smoke workflow on forks and mirrors: on a pull request
+  it checked the head branch against, and `install.ps1` cloned from, the
+  hard-coded upstream repository, where a fork's branch does not exist, so
+  the ref check failed and both smoke jobs were skipped. Pull requests now
+  check and install from the repository running CI; manual runs still
+  install released upstream tags. `install.ps1` takes the source from
+  `CLAUDE_SEO_REPO_URL`, accepted only as `https://github.com/<owner>/claude-seo`
+  and refused otherwise. Unset, the installer is unchanged.
+
 - ScrapeGraphAI extension: the PyPI package `scrapegraph-mcp` 1.0.1 it used
   to install calls `api.scrapegraphai.com/v1`, whose TLS endpoint is dead,
   so every tool failed. The installers no longer create a Python venv; they

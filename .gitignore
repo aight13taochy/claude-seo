@@ -197,3 +197,6 @@ id_ed25519.*
 # Local scratch and generated decks (never shipped)
 tmp/
 outputs/
+
+# graphify knowledge-graph output (local analysis artifacts)
+graphify-out/
