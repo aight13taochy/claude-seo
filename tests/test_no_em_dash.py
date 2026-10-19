@@ -9,8 +9,9 @@ the regression gate: it fails if a future edit reintroduces one.
 Two kinds of exception exist:
 
 1. Paths that are synced upstream and hash-locked (skills/seo-flow/references/
-   prompts/** and skills/seo-flow/references/flow-prompts.lock). Those files
-   are never touched by this house-style rule.
+   prompts/** and skills/seo-flow/references/flow-prompts.lock), and
+   docs/archive/**, dated audit and review snapshots kept verbatim. Those
+   files are never touched by this house-style rule.
 2. A small allowlist of occurrences that are functional, not stylistic: a
    character class in a regex that detects or strips em dashes, and one
    generated-file header string that must keep matching the (excluded,
@@ -42,7 +43,7 @@ TARGET_PREFIXES = (
 )
 TARGET_FILES = {"README.md", "CLAUDE.md", "AGENTS.md"}
 
-EXCLUDED_PREFIXES = ("skills/seo-flow/references/prompts/",)
+EXCLUDED_PREFIXES = ("skills/seo-flow/references/prompts/", "docs/archive/")
 EXCLUDED_FILES = {"skills/seo-flow/references/flow-prompts.lock"}
 
 # (relative path, exact line content) pairs that are allowed to keep an em
