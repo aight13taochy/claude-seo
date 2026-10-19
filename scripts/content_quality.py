@@ -67,9 +67,6 @@ _FILLER_PHRASES: tuple[str, ...] = (
     "it's important to note that",
     "in this article, we'll explore",
     "in this article we will explore",
-    "in today's fast-paced world",
-    "in today's digital age",
-    "in today's competitive landscape",
     "needless to say",
     "at the end of the day",
     "when it comes to",
@@ -98,8 +95,6 @@ _FILLER_PHRASES: tuple[str, ...] = (
 # only phrases that disproportionately appear in LLM output. Adding to
 # this list should require corpus evidence, not just intuition.
 _AI_PATTERNS: tuple[str, ...] = (
-    "delve into",
-    "delve deeper into",
     "in the ever-evolving",
     "ever-evolving landscape",
     "ever-changing landscape",
@@ -147,6 +142,48 @@ _AI_PATTERNS: tuple[str, ...] = (
 )
 
 
+# Families of the phrases above that vary in one slot, so a literal list
+# misses them. Each is (regex, family). They run on the normalised text and
+# report the matched words, not the family name.
+#   - "in today's <adjectives> world/landscape/...": the old list held three
+#     fixed variants and missed e.g. "in today's fast-paced digital landscape".
+#   - "delve/delves/delved/delving (deeper) into": the old list only knew the
+#     base form.
+_FILLER_FAMILIES: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(
+        r"\bin today's (?:[a-z][a-z-]* ){0,3}"
+        r"(?:world|landscape|age|era|environment|economy|market|marketplace|climate)\b"),
+     "in today's ... world"),
+)
+_AI_FAMILIES: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"\bdelv(?:e|es|ed|ing) (?:deeper )?into\b"), "delve into"),
+)
+
+# Contractions the phrase lists use. Text and phrases are both expanded, so
+# "it is important to note that" matches the listed "it's important to note
+# that" and vice versa.
+_CONTRACTIONS: tuple[tuple[str, str], ...] = (
+    ("it's", "it is"),
+    ("let's", "let us"),
+    ("we'll", "we will"),
+    ("that's", "that is"),
+)
+
+
+def _normalise(text: str) -> str:
+    """Lower-case, straighten quotes, expand contractions, collapse whitespace.
+
+    Drafts pasted from word processors and CMSs use typographic apostrophes
+    (U+2019), which made every listed phrase containing "'" unmatchable.
+    """
+    t = text.lower()
+    t = t.replace("\u2019", "'").replace("\u2018", "'").replace("\u02bc", "'")
+    t = re.sub(r"\s+", " ", t)
+    for short, long in _CONTRACTIONS:
+        t = re.sub(r"\b" + re.escape(short) + r"\b", long, t)
+    return t
+
+
 # Latin words, Hangul eojeol, and CJK/kana characters. Korean is space
 # delimited so a run of syllables is one token; Chinese and Japanese are
 # unspaced, so one ideograph or kana counts as one token.
@@ -187,10 +224,26 @@ def _detect_script(text: str) -> str | None:
     return "cjk" if cjk_chars >= latin_chars else None
 
 
-def _count_phrase_hits(text: str, patterns: Iterable[str]) -> list[str]:
-    """Return the patterns that appear at least once in ``text`` (case-insensitive)."""
-    lowered = text.lower()
-    return [p for p in patterns if p in lowered]
+def _count_phrase_hits(
+    text: str,
+    patterns: Iterable[str],
+    families: Iterable[tuple[re.Pattern, str]] = (),
+) -> list[str]:
+    """Return the phrases that appear at least once in ``text``.
+
+    Matching runs on :func:`_normalise` output, so case, typographic quotes,
+    contractions, and line breaks do not hide a phrase. Listed phrases are
+    reported as written in the list; family matches are reported as the words
+    found (``"in today's fast-paced digital landscape"``), once per distinct
+    wording.
+    """
+    norm = _normalise(text)
+    hits = [p for p in patterns if _normalise(p) in norm]
+    for regex, _family in families:
+        for m in regex.finditer(norm):
+            if m.group(0) not in hits:
+                hits.append(m.group(0))
+    return hits
 
 
 def _repetition_score(tokens: list[str]) -> float:
@@ -222,8 +275,8 @@ def analyse(text: str) -> dict:
     n_tokens = len(tokens)
     unique = len(set(tokens))
 
-    filler_hits = _count_phrase_hits(text, _FILLER_PHRASES)
-    ai_hits = _count_phrase_hits(text, _AI_PATTERNS)
+    filler_hits = _count_phrase_hits(text, _FILLER_PHRASES, _FILLER_FAMILIES)
+    ai_hits = _count_phrase_hits(text, _AI_PATTERNS, _AI_FAMILIES)
 
     # Density: entities + numbers per 100 tokens. A typical high-density
     # article (case studies, data journalism) lands at ~5+; a generic

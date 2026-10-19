@@ -59,9 +59,10 @@ Write `extracted_text` from `render_page.py` to `page.txt`, then run:
 
 Report `overall_quality` and `flags` from the first, and every uncited claim
 from the second. Exit code 1 means a threshold was crossed, not that the run
-failed. Both are heuristics with known false negatives (English-only phrase
-lists; any nearby link or "according to" counts as a citation), so a clean
-result never clears a page and a low score is not proof of AI authorship.
+failed. Both are heuristics with known false negatives (English-only,
+incomplete phrase lists; a citation in the claim's sentence is never checked
+against the claim), so a clean result never clears a page and a low score is
+not proof of AI authorship.
 
 ## E-E-A-T Scoring
 

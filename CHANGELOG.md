@@ -84,9 +84,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   though `content_verify.py` names that workflow and the hreflang
   machine-translation reference already deferred to `seo-content` for it. The
   skill and the `seo-content` agent document both commands, their exit codes,
-  and their limits (English-only phrase lists, a citation window that accepts
-  any nearby link), and the skill's output template gains an Automated Signals
-  table.
+  and their limits (English-only phrase lists, and a citation check that does
+  not verify the source supports the claim), and the skill's output template
+  gains an Automated Signals table.
+- `content_quality.py` missed filler and AI phrasing that differed from its
+  lists in form only. Matching now ignores case, typographic apostrophes,
+  line breaks, and contractions ("it is important to note that" matches the
+  listed "it's important to note that"), and two families replace fixed
+  entries: "in today's <adjectives> world/landscape/age/..." and every
+  inflection of "delve (deeper) into". No new phrases were added to the lists.
+- `content_verify.py` over-counted citations and under-counted claims:
+  - A blanket case-insensitive flag turned the proper-noun check after
+    "per"/"according to" into "any letter", so "per day" and "according to a"
+    counted as sources. The name must now be capitalised.
+  - A citation within 200 characters covered every nearby claim, so one
+    footnote cited the two sentences before it. A citation now counts only in
+    the claim's own sentence, or in a "Source:" line right after it.
+  - A bare percentage ("rose 40% per year.") was never a claim, because a
+    trailing `\b` cannot follow "%", and a sentence-initial "In 2025," or
+    "According to ... study" was missed because the keywords were
+    lower-case only.
 
 - `hooks/run-python-hook.js` handed the hook to the next Python candidate on
   any spawn error, even after the chosen interpreter had passed its probe. A
