@@ -143,7 +143,7 @@ claude
 
 ![Claude SEO sub-skill ecosystem: 25 modules grouped into 8 categories (audit, content, schema, technical, AI search, local + maps, commerce + intl, extensions) around the central orchestrator](assets/sub-skills.svg)
 
-32 user-invocable `/seo` commands across the orchestrator, its sub-skills, and 8 MCP extensions. Full reference in [docs/COMMANDS.md](docs/COMMANDS.md).
+33 user-invocable `/seo` commands across the orchestrator, its sub-skills, and 9 MCP extensions. Full reference in [docs/COMMANDS.md](docs/COMMANDS.md).
 
 | Command | Description |
 |---------|-------------|
@@ -172,6 +172,7 @@ claude
 | `/seo ecommerce <url>` | E-commerce SEO and marketplace intelligence |
 | `/seo flow [stage]` | FLOW framework prompts (CC BY 4.0, evidence-led) |
 | `/seo firecrawl [command] <url>` | Full-site crawling (extension) |
+| `/seo scrapegraphai [command] <url\|query>` | LLM-powered scraping, extraction, search, and crawling (extension) |
 | `/seo dataforseo [command]` | Live SEO data (extension) |
 | `/seo image-gen [use-case]` | AI image generation for SEO assets (extension) |
 | `/seo ahrefs [command] <url>` | Backlinks, organic keywords, and content data via the official Ahrefs MCP (extension) |
@@ -396,6 +397,17 @@ Full-site crawling and URL discovery via the [Firecrawl](https://www.firecrawl.d
 ```
 
 Full Firecrawl docs: [extensions/firecrawl/README.md](extensions/firecrawl/README.md).
+
+### ScrapeGraphAI
+
+Prompt-driven structured extraction, search, and AI crawling via the official [ScrapeGraphAI](https://scrapegraphai.com/) MCP server (Python, installed into an isolated venv).
+
+```bash
+./extensions/scrapegraphai/install.sh
+/seo scrapegraphai extract https://example.com/page "title, meta description, every H2"
+```
+
+Full ScrapeGraphAI docs: [extensions/scrapegraphai/README.md](extensions/scrapegraphai/README.md).
 
 ### Banana: AI image generation
 

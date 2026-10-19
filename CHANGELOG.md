@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- ScrapeGraphAI extension (`extensions/scrapegraphai/`): installs the official
+  `scrapegraph-mcp` Python server into an isolated venv and exposes
+  `/seo scrapegraphai` for prompt-driven extraction, search, markdown
+  conversion, async AI crawling, and agentic browsing.
+
 ## [2.2.5] - 2026-08-25
 
 ### Added

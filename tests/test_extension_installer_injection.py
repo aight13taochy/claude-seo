@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLERS = {
     "extensions/dataforseo/install.sh": 4,  # settings, username, password, field_config
     "extensions/firecrawl/install.sh": 2,   # settings, api_key
+    "extensions/scrapegraphai/install.sh": 3,  # settings, api_key, venv_python
     "extensions/banana/install.sh": 2,      # settings, api_key
 }
 
