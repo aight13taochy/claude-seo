@@ -47,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full` fills a missing headline from the categories, and warns on stderr
   when the declared score is more than 2 points off, without rewriting it.
 
+- `tests/test_extension_mirrors.py` and an "Extension Convention" note in
+  `docs/ARCHITECTURE.md`: the core copies of the DataForSEO and Banana skill
+  and agent were called mirrors but had drifted from the extension copies the
+  installers use (49 lines of the seo-image-gen SKILL.md, 5 of its 9
+  reference files). The difference is now documented as intended: the core
+  copy needs only the MCP server, the extension copy may call extension
+  scripts, and facts such as model IDs and retirement dates must change in
+  both. The test checks that each pair exists under one name, that no core
+  copy passes `--extension` to the launcher, and that the Banana reference
+  files are the same list on both sides.
+
 ### Changed
 
 - One URL-safety rule across CONTRIBUTING.md, CLAUDE.md, AGENTS.md,
