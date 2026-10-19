@@ -116,6 +116,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `/seo unlighthouse` no longer reaches private addresses through
+  unlighthouse's own DNS and redirects. `scripts/unlighthouse_run.py` used
+  to validate the target and then discard the pinned IP: unlighthouse's
+  Chromium re-resolved the host (DNS rebinding), and its Node crawler (axios)
+  followed any redirect, including to `http://169.254.169.254/`, and kept
+  the response HTML in the report. The generated config now passes
+  `chromium_launch_args()` as `puppeteerOptions.args`, and the new
+  `scripts/node_net_guard.cjs`, preloaded with `NODE_OPTIONS=--require`,
+  pins the audited host in every Node process and refuses connections to
+  non-public addresses. Loopback stays reachable from Node (Chromium's
+  DevTools port) and Chromium's third-party requests are unchecked; both are
+  documented in SECURITY.md. Verified end to end against unlighthouse 0.13.5
+  with a page redirecting to the metadata address.
+
 - Chromium is launched with `--host-resolver-rules` mapping the audited host
   to the IP `validate_url_strict()` validated (`render_page.py`,
   `capture_screenshot.py`, `analyze_visual.py`). A DNS-rebinding answer can
