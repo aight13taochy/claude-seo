@@ -530,8 +530,10 @@ def render_page(
                         result["console_errors"].append(msg.text)
 
                 page.on("console", _on_console)
-                page.route("**/*", route_handler)
-                page.on("request", route_handler.watch_request)
+                # On the context, not the page: a popup the page opens with
+                # window.open() is a new page that page.route() never sees.
+                context.route("**/*", route_handler)
+                context.on("request", route_handler.watch_request)
 
                 try:
                     response = page.goto(

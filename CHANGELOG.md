@@ -207,6 +207,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A page audited by `render_page.py`, `capture_screenshot.py` or
+  `analyze_visual.py` could reach private addresses through a popup.
+  Playwright disables Chromium's popup blocker, so `window.open()` needs no
+  user gesture, and the route handler and redirect watcher were registered
+  with `page.route()` / `page.on()`, which never see a new page: a popup to
+  `http://169.254.169.254/` or a loopback service loaded unchecked, and the
+  render still reported success. Both are now registered on the browser
+  context, which covers every page in it, and the entry-point test refuses a
+  page-level registration. Verified in Chromium against all three scripts:
+  the popup's request no longer reaches the internal server, and the pages
+  still render.
+
 - `/seo unlighthouse` no longer reaches private addresses through
   unlighthouse's own DNS and redirects. `scripts/unlighthouse_run.py` used
   to validate the target and then discard the pinned IP: unlighthouse's

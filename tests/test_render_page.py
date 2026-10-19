@@ -357,9 +357,13 @@ class _FakePlaywrightManager:
             def detach(self):
                 return None
 
+        # render_page guards the context (so popups are covered); the fake
+        # forwards route()/on() to the page so its listeners still fire.
         context = SimpleNamespace(
             new_page=lambda: page,
             new_cdp_session=lambda _page: _Session(),
+            route=page.route,
+            on=page.on,
         )
         browser = SimpleNamespace(
             new_context=lambda **_kwargs: context,

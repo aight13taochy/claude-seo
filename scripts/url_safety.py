@@ -94,8 +94,10 @@ Python layer. Those scripts must:
   3. Attach a Playwright ``route()`` handler, built with
      ``top_level_url=`` the validated URL, that re-validates each
      resolved request IP and aborts subresource fetches to private
-     ranges, AND
-  4. Register ``page.on("request", handler.watch_request)`` and call
+     ranges. Attach it to the browser context (``context.route``), not
+     the page: a popup the page opens with ``window.open()`` is a new
+     page that ``page.route()`` never sees, AND
+  4. Register ``context.on("request", handler.watch_request)`` and call
      ``handler.check_redirects()`` before using anything the page
      produced. Playwright never routes a 30x hop; this refuses the
      render when a hop went somewhere the handler would have refused.
@@ -1198,7 +1200,7 @@ def make_safe_playwright_route_handler(
     :func:`validate_url_strict`.
 
     Playwright does not call a route handler for redirect hops. Callers
-    therefore also register ``page.on("request", handler.watch_request)``
+    therefore also register ``context.on("request", handler.watch_request)``
     and call ``handler.check_redirects()`` before using anything the page
     produced; it raises ``URLSafetyError`` when a hop went somewhere the
     handler would have refused.
@@ -1220,7 +1222,8 @@ def make_safe_playwright_route_handler(
 
     Returns:
         Callable ``(route, request) -> None`` suitable for
-        ``page.route("**/*", handler)``.
+        ``context.route("**/*", handler)``. Register it on the browser
+        context rather than the page so popups are covered too.
     """
     local_origin = _allowlisted_origin(top_level_url) if top_level_url else None
     return _SafeRouteHandler(blocked_resource_types, local_origin)
