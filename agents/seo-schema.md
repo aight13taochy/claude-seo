@@ -85,4 +85,4 @@ before finishing, so a turn-budget stop never loses completed work:
 - `output_dir/findings/schema.md`: detected schema, validation errors, missing opportunities, and generated recommendations
 - Structured JSON-compatible findings for `audit-data.json` under the Schema / Structured Data category
 
-For schema audits on SPA sites prefer `--mode always`: many sites inject JSON-LD client-side via React Helmet, Next/Head, or vue-meta, so the raw HTML will be empty of structured data even when the rendered DOM has the full graph. Compare `raw_content` vs `content` to confirm whether schema is server-rendered.
+For schema audits on SPA sites prefer `--mode always`: many sites inject JSON-LD client-side via React Helmet, Next/Head, or vue-meta, so the raw HTML will be empty of structured data even when the rendered DOM has the full graph. Compare `raw_content` vs `content` to confirm whether schema is server-rendered, adding `--max-html 0` so neither field is cut at the default 2,000 characters.

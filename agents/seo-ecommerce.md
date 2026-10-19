@@ -65,9 +65,9 @@ Match existing claude-seo patterns:
 
 ## Fetching pages (v2.0.0)
 
-Use `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run render_page.py <URL> --mode auto --json` for page HTML. `auto` does a raw fetch and only spins up Playwright when an SPA shell is detected; use `--mode always` to force a render or `--mode never` to skip Playwright entirely. The JSON exposes `raw_content` (pre-JS), `content` (post-JS), `is_spa`, `extracted_text` (boilerplate-stripped via trafilatura), and `publication_date` (htmldate). SSRF and DNS-rebinding protection live in the bundled `url_safety.py` module, never call `requests.get` directly on user-supplied URLs.
+Use `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run render_page.py <URL> --mode auto --json` for page HTML. `auto` does a raw fetch and only spins up Playwright when an SPA shell is detected; use `--mode always` to force a render or `--mode never` to skip Playwright entirely. The JSON exposes `raw_content` (pre-JS), `content` (post-JS), `is_spa`, `extracted_text` (boilerplate-stripped via trafilatura), and `publication_date` (htmldate); the two HTML fields are capped at 2,000 characters unless you pass `--max-html 0`. SSRF and DNS-rebinding protection live in the bundled `url_safety.py` module, never call `requests.get` directly on user-supplied URLs.
 
-E-commerce sites overwhelmingly inject product schema client-side (Shopify, Magento PWA, headless commerce on Next.js). Prefer `--mode always` for product page audits and compare `raw_content` vs `content` to confirm whether the JSON-LD is server-rendered.
+E-commerce sites overwhelmingly inject product schema client-side (Shopify, Magento PWA, headless commerce on Next.js). Prefer `--mode always` for product page audits and compare `raw_content` vs `content` to confirm whether the JSON-LD is server-rendered, adding `--max-html 0` so neither field is cut at the default 2,000 characters.
 
 ## Security Rules
 

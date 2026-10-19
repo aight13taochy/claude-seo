@@ -68,6 +68,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `render_page.py --json` and `fetch_page.py --json` printed the whole page
+  HTML twice (`content`, then `raw_content`) ahead of `extracted_text`, the
+  field every scoring path reads. A 300 KB page produced about 620,000
+  characters with `extracted_text` past character 614,000, so an agent reading
+  a truncated tool result never saw it, and a full read cost the page twice in
+  context. Since v2.2.5 `--max-text` could only cap the HTML by capping the text
+  too. The JSON now lists every short field first and `extracted_text`,
+  `content`, `raw_content` last, keeps `extracted_text` whole, and caps the two
+  HTML fields at 2,000 characters by default. The new `--max-html N` changes
+  that cap (`0` keeps the full HTML); `--max-text` still caps all three fields,
+  and `truncation.html_limit` records the HTML cap. Agents that compare
+  `raw_content` with `content` (`seo-schema`, `seo-ecommerce`) now pass
+  `--max-html 0`.
+
 - `CLAUDE_SEO_LOCAL_TARGETS` now covers Playwright rendering
   (`render_page.py --mode always`, `capture_screenshot.py`,
   `analyze_visual.py`). The pre-flight check passed an allowlisted target
