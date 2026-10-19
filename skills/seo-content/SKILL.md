@@ -1,8 +1,8 @@
 ---
 name: seo-content
 description: >
-  Evaluate page content for usefulness, E-E-A-T, readability, thinness, and AI
-  citation readiness, plus last-mile draft cleanup (AI-typical phrasing and
+  Evaluate page content for usefulness, E-E-A-T, readability, thinness, AI
+  citation readiness, and uncited claims, plus last-mile draft cleanup (AI-typical phrasing and
   invisible Unicode watermark characters). Use for content-only analysis, not
   full-page technical checks.
 user-invocable: true
@@ -137,6 +137,39 @@ Google's raters assess low-quality, scaled, copied, or AI-generated main content
 
 > **Honest scoping (Google docs, 2026-06-05):** per "Using third-party SEO tools, services, and advice," no tool guarantees rankings and third-party tools have no access to Google's internal ranking data. claude-seo's scores are **heuristics**, not Google-internal signals, so say so in reports, and validate GEO/AEO findings against Google's official guidance (Search Console is the first-party source).
 
+## Automated Quality Signals
+
+Run both detectors on the page's main text before scoring. For a URL, save
+`extracted_text` from `render_page.py --json` to a file (navigation, footers
+and cookie banners are already stripped); for a draft, use the user's file.
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_quality.py page.txt --json
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_verify.py page.txt --json
+```
+
+1. **`content_quality.py`** scores filler, AI-typical phrasing, information
+   density, and repetition against the QRG lowest-rating triggers (scaled
+   content, copied or AI-generated main content, filler). Report
+   `overall_quality`, `flags`, and the `matches` behind them. If `coverage`
+   is present the text is CJK: say the score is not comparable to an
+   English page.
+2. **`content_verify.py`** lists verifiable claims (statistics, quantities,
+   authority, dates, comparisons) and flags those with no nearby citation.
+   Report `uncited_count` of `claim_count` and quote each uncited claim; they
+   feed the Expertise ("well-sourced claims") and Trustworthiness rows.
+
+Both scripts exit 1 when the text crosses their `--threshold` (quality below
+60, uncited ratio above 0.4). That is a finding, not a failure: read the JSON
+either way.
+
+Scope honesty: both are deterministic heuristics with known false negatives.
+The phrase lists are English-only and incomplete, and any link, footnote, or
+"according to" within 200 characters counts as a citation even when it does
+not support the claim. A clean result never clears a page, so confirm by
+reading the text. A low score is a prompt for review, not a verdict that the
+content is AI-generated.
+
 ## Draft Cleanup: AI Phrasing & Invisible Watermarks
 
 For "humanize this", "remove watermarks", or "clean up this draft", run the
@@ -228,6 +261,12 @@ drawing conclusions. A date overlap is a hypothesis, never proof of cause.
 > (it contradicts Google's "trust is most important").
 
 ### AI Citation Readiness: XX/100
+
+### Automated Signals
+| Detector | Result |
+|----------|--------|
+| `content_quality.py` | overall_quality XX/100, flags |
+| `content_verify.py` | N of M claims uncited (quote them) |
 
 ### Issues Found
 ### Recommendations
