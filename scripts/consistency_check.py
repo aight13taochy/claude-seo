@@ -47,10 +47,16 @@ LOCK_PATH = "skills/seo-flow/references/flow-prompts.lock"
 RUNTIME_UTILITY_COMMANDS = {"setup", "doctor"}
 
 
+# Generated artifacts quote repo docs verbatim (e.g. graphify knowledge-graph
+# output), so scanning them would report the docs' own example paths as dead refs.
+GENERATED_PREFIXES = ("graphify-out/",)
+
+
 def tracked_files():
     out = subprocess.run(["git", "-C", REPO, "ls-files"],
                          capture_output=True, text=True, check=True).stdout
-    return [line for line in out.splitlines() if line.strip()]
+    return [line for line in out.splitlines()
+            if line.strip() and not line.startswith(GENERATED_PREFIXES)]
 
 
 def read(rel, _cache={}):
