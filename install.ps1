@@ -114,6 +114,18 @@ try {
 $SkillDir = "$env:USERPROFILE\.claude\skills\seo"
 $AgentDir = "$env:USERPROFILE\.claude\agents"
 $RepoUrl = "https://github.com/AgriciDaniel/claude-seo"
+# CI override: the Windows smoke workflow installs a pull request's own branch,
+# which lives in the repository running CI (a fork or mirror, not upstream).
+# Only a GitHub repository named claude-seo is accepted, so the override cannot
+# point the installer at an arbitrary host; anything else is refused, never
+# silently replaced by the default.
+if ($env:CLAUDE_SEO_REPO_URL) {
+    if ($env:CLAUDE_SEO_REPO_URL -notmatch '^https://github\.com/[A-Za-z0-9][A-Za-z0-9-]{0,38}/claude-seo\z') {
+        Write-Host "[x] CLAUDE_SEO_REPO_URL must be https://github.com/<owner>/claude-seo" -ForegroundColor Red
+        exit 1
+    }
+    $RepoUrl = $env:CLAUDE_SEO_REPO_URL
+}
 # Pin to a specific release tag to prevent silent updates from main.
 # This default MUST be bumped on every release. CI guard
 # (tests/test_manifest_consistency.py) enforces this matches plugin.json.
