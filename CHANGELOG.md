@@ -56,6 +56,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `CLAUDE_SEO_LOCAL_TARGETS` now covers Playwright rendering
+  (`render_page.py --mode always`, `capture_screenshot.py`,
+  `analyze_visual.py`). The pre-flight check passed an allowlisted target
+  such as `localhost:8080`, but the route handler re-validated every
+  browser request without the allowlist and aborted the page itself
+  (`localhost` is a blocked hostname, `127.0.0.1` fails `is_safe_ip`), so
+  the render failed with `net::ERR_FAILED`; the raw fetch was unaffected.
+  The proxy environment was not involved. `make_safe_playwright_route_handler`
+  takes `top_level_url=`, and when the allowlist names that URL it admits
+  that exact origin (scheme, host, and port) up to the allowlist ceiling.
+  The same host on another port, any other loopback or private address,
+  and metadata endpoints stay refused.
+
+- Redirect hops are now checked in both fetch paths. Playwright never calls
+  a route handler for a 30x hop, so Chromium followed redirects the handler
+  would have refused, for any audit target (a public page could 302 a
+  screenshot to a private address). The scripts now register
+  `page.on("request", handler.watch_request)` and call
+  `handler.check_redirects()`, which refuses the render and discards its
+  content, accessibility tree, screenshot, or measurements. The hop request
+  has already been sent when it is detected (SECURITY.md). On the raw path, a
+  non-public DNS pin (one that exists only through the allowlist) now
+  answers for the audited port alone, so `localhost:8080` redirecting to
+  `localhost:9090` is refused instead of following the pin.
+
 - Windows installer smoke workflow on forks and mirrors: on a pull request
   it checked the head branch against, and `install.ps1` cloned from, the
   hard-coded upstream repository, where a fork's branch does not exist, so
