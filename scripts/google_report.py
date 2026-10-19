@@ -21,6 +21,11 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import audit_score  # noqa: E402  (sys.path massage above is intentional)
+
 try:
     import matplotlib
     matplotlib.use("Agg")
@@ -2063,6 +2068,23 @@ def _build_methodology_footer(domain, timestamp, gsc_warning=""):
 
 # ─── Report Assemblers ───────────────────────────────────────────────────────
 
+def _reconcile_health_score(data):
+    """Check summary.health_score against the category scores.
+
+    Uses audit_score.py, which owns the category weights. A missing
+    headline is filled from the categories. A declared score that
+    disagrees is kept, so the report never rewrites the audit's number
+    silently; the mismatch is returned for the caller to surface.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("categories"), list):
+        return data, None
+    check = audit_score.check_declared(data)
+    if check["status"] == "no_declared":
+        summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+        data = {**data, "summary": {**summary, "health_score": check["health_score"]}}
+    return data, check
+
+
 def generate_report(report_type, data, domain, output_dir, output_format="pdf"):
     """
     Generate a complete professional PDF/HTML report.
@@ -2083,6 +2105,18 @@ def generate_report(report_type, data, domain, output_dir, output_format="pdf"):
 
     timestamp = datetime.now().strftime("%B %d, %Y")
     result = {"report_type": report_type, "domain": domain, "files": [], "error": None}
+
+    if report_type == "full":
+        data, score_check = _reconcile_health_score(data)
+        if score_check is not None:
+            result["score_check"] = score_check
+            if score_check["status"] == "mismatch":
+                result.setdefault("warnings", []).append(
+                    f"summary.health_score is {score_check['declared']:g} but the "
+                    f"category scores give {score_check['health_score']} "
+                    f"(coverage {score_check['coverage']:.0%}). Run "
+                    "audit_score.py --write on the audit data before reporting."
+                )
 
     # ── Generate Charts ──────────────────────────────────────────────────────
 
@@ -2702,6 +2736,8 @@ def main():
 
     if result.get("error"):
         print(f"Error: {result['error']}", file=sys.stderr)
+    for warning in result.get("warnings", []):
+        print(f"Warning: {warning}", file=sys.stderr)
 
     if args.json:
         print(json.dumps(result, indent=2))

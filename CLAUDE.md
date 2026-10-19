@@ -90,7 +90,7 @@ claude-seo/
     seo-flow.md                  # FLOW framework integration
   hooks/                           # Quality gate hooks
     hooks.json                   # PostToolUse schema validation
-  scripts/                         # 60 Python execution scripts
+  scripts/                         # 61 Python execution scripts
     google_auth.py               # Credential management (OAuth, SA, API key, 4-tier detection)
     backlinks_auth.py            # Backlink API credential management (Moz, Bing)
     moz_api.py                   # Moz Link Explorer API (DA/PA, spam, domains, anchors)
@@ -107,6 +107,7 @@ claude-seo/
     matomo_report.py             # Matomo Reporting API client (extension)
     keywordseverywhere_api.py    # Keywords Everywhere (Open PageRank) backlinks fallback
     google_report.py             # PDF/HTML report generator (WeasyPrint + matplotlib)
+    audit_score.py               # SEO Health Score recompute from audit-data.json categories
     youtube_search.py            # YouTube Data API v3
     nlp_analyze.py               # Cloud Natural Language API
     keyword_planner.py           # Google Ads Keyword Planner

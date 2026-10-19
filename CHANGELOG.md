@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_url` from `google_auth`, or launches Chromium without the
   resolver pin.
 
+- `scripts/audit_score.py`: recomputes the SEO Health Score from the
+  category scores in `audit-data.json`. The full audit used to ask the model
+  to aggregate the score itself, and `google_report.py` printed whatever
+  number it wrote, so an arithmetic slip reached the PDF title page. The
+  script now owns the seven category weights (the SKILL.md tables restate
+  them, and a test keeps them in step). It rescales the weights when a
+  category could not be scored and reports that `coverage`, and lists
+  unweighted categories such as Backlink Profile, which never moved the
+  score. `seo-audit` step 5 runs it with `--write`. `google_report.py --type
+  full` fills a missing headline from the categories, and warns on stderr
+  when the declared score is more than 2 points off, without rewriting it.
+
 ### Changed
 
 - One URL-safety rule across CONTRIBUTING.md, CLAUDE.md, AGENTS.md,
