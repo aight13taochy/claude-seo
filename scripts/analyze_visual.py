@@ -105,9 +105,11 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
 
             # Desktop analysis
             desktop = browser.new_context(viewport={"width": 1920, "height": 1080})
+            # On the context, not the page, so a window.open() popup is
+            # guarded too.
+            desktop.route("**/*", route_handler)
+            desktop.on("request", route_handler.watch_request)
             page = desktop.new_page()
-            page.route("**/*", route_handler)
-            page.on("request", route_handler.watch_request)
             page.goto(url, wait_until="networkidle", timeout=timeout)
 
             # Check H1 visibility above fold
@@ -161,9 +163,9 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
 
             # Mobile analysis
             mobile = browser.new_context(viewport={"width": 375, "height": 812})
+            mobile.route("**/*", route_handler)
+            mobile.on("request", route_handler.watch_request)
             page = mobile.new_page()
-            page.route("**/*", route_handler)
-            page.on("request", route_handler.watch_request)
             page.goto(url, wait_until="networkidle", timeout=timeout)
 
             # Check viewport meta

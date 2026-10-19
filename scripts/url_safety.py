@@ -94,12 +94,14 @@ Python layer. Those scripts must:
   3. Attach a Playwright ``route()`` handler, built with
      ``top_level_url=`` the validated URL, that re-validates each
      resolved request IP and aborts subresource fetches to private
-     ranges, AND
+     ranges. Attach it to the browser context (``context.route``), not
+     the page: a popup the page opens with ``window.open()`` is a new
+     page that ``page.route()`` never sees, AND
   4. Call ``handler.guard_browser(browser)`` right after launch.
      Playwright never routes a 30x hop; this intercepts every request,
      hops included, at the DevTools ``Fetch`` layer and fails a refused
      one before it is sent, AND
-  5. Register ``page.on("request", handler.watch_request)`` and call
+  5. Register ``context.on("request", handler.watch_request)`` and call
      ``handler.check_redirects()`` before using anything the page
      produced, as a second check on the same hops.
 
@@ -1077,7 +1079,7 @@ class _SafeRouteHandler:
     30x redirect. :meth:`guard_browser` closes that gap before anything is
     sent: it intercepts every request Chromium issues, hops included, at the
     DevTools ``Fetch`` layer and fails the ones this rule refuses.
-    :meth:`watch_request` (a ``page.on("request")`` listener) and
+    :meth:`watch_request` (a ``context.on("request")`` listener) and
     :meth:`check_redirects` stay as a second check that refuses the render
     if a refused hop is ever seen anyway.
     """
@@ -1262,7 +1264,7 @@ def make_safe_playwright_route_handler(
     Playwright does not call a route handler for redirect hops. Callers
     therefore also call ``handler.guard_browser(browser)`` right after
     launch, which fails a refused hop before Chromium sends it, register
-    ``page.on("request", handler.watch_request)``, and call
+    ``context.on("request", handler.watch_request)``, and call
     ``handler.check_redirects()`` before using anything the page produced;
     it raises ``URLSafetyError`` when a hop went somewhere the handler would
     have refused.
@@ -1284,7 +1286,8 @@ def make_safe_playwright_route_handler(
 
     Returns:
         Callable ``(route, request) -> None`` suitable for
-        ``page.route("**/*", handler)``.
+        ``context.route("**/*", handler)``. Register it on the browser
+        context rather than the page so popups are covered too.
     """
     local_origin = _allowlisted_origin(top_level_url) if top_level_url else None
     return _SafeRouteHandler(blocked_resource_types, local_origin)
