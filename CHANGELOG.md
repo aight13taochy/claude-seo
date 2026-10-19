@@ -98,6 +98,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be written as one resolver rule is refused before Chromium starts.
   Third-party hosts stay covered by the route handler only (SECURITY.md).
 
+- `unlighthouse_run.py` no longer lets unlighthouse resolve or discover hosts
+  on its own. It validated the target, then discarded the pinned IP, so
+  unlighthouse's Chromium and its Node (axios) fetches resolved the host again
+  and a DNS-rebinding answer could point them at an internal address; its
+  crawler also followed links such as `https://site@10.0.0.1/` and any
+  subdomain. Chromium now gets the `chromium_launch_args()` pin through the
+  generated config's `puppeteerOptions.args`; every Node process of the run
+  preloads the new `scripts/node_dns_pin.cjs`, which pins the same host in
+  `dns.lookup`; and the wrapper passes a `urls` list, built from the site's
+  sitemaps (or the target page's links) through `url_safety` and limited to
+  the target's exact origin, which turns off unlighthouse's own sitemap,
+  robots.txt and crawler discovery. Pages reachable only by deeper crawling
+  and subdomains are no longer scanned. Redirects inside unlighthouse are
+  still not re-validated: each result carries that in `warnings`, and
+  SECURITY.md lists it as a residual risk.
+
 ## [2.4.2] - 2026-10-04
 
 seo-cockpit, Google sign-in through your own account, and a schema-hook fix.
