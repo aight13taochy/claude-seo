@@ -357,3 +357,18 @@ extensions/
 5. Installs the sub-agent mirror to the plugin's agent directory (extensions that ship one; lighter extensions are skill-only)
 6. Merges MCP config into `~/.claude/settings.json` non-destructively
 7. MCP server versions are pinned (`@<version>`) for supply-chain stability
+
+**Mirrors are adaptations, not copies.** Two extensions also have a core copy
+of their skill and agent (`skills/seo-dataforseo/`, `skills/seo-image-gen/`,
+`agents/seo-dataforseo.md`, `agents/seo-image-gen.md`), so the plugin can
+discover them without running the installer. The installer copies the
+extension's own files, not the core ones. The two copies differ on purpose:
+the core copy works with the MCP server alone and never passes `--extension`
+to the `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run` launcher, while the extension copy may call the
+extension's scripts (Banana: `cost_tracker.py`, `presets.py`, `generate.py`).
+Facts are not covered by that difference: a model ID, a retirement date, a
+price or a study figure changed in one copy must be changed in the other.
+`tests/test_extension_mirrors.py` checks that each pair exists under one
+name, that the core copy calls no extension script, and that the Banana
+reference files are the same list on both sides. It does not compare
+wording, so keeping facts in step is a review task.

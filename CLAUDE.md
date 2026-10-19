@@ -215,6 +215,7 @@ claude-seo/
 - Bundled tools run through `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run`; plugin state uses `CLAUDE_PLUGIN_DATA`
 - Manual Python dependencies install into `~/.claude/skills/seo/.venv/`
 - Test with `python3 -m pytest tests/` after changes (if applicable)
+- Extension mirrors (`skills/seo-dataforseo`, `skills/seo-image-gen` and their agents) are adaptations of the extension copy: the core copy uses the MCP server only, the extension copy may call extension scripts. Update facts (model IDs, retirement dates, prices) in both copies. See "Extension Convention" in `docs/ARCHITECTURE.md`
 
 ## Security Rules
 
