@@ -60,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/archive/` holds `AUDIT-2026-05-07.md`, `AUDIT-2026-05-09.md`,
+  `AUDIT-2026-05-09-followup.md` and `REVIEW-open-prs-issues-2026-08.md`. They lived only
+  on the `claude/repo-audit-review-Eg1A7` and `claude/prs-issues-review-1zwegz` branches,
+  whose code is already merged; each carries a note marking it as a dated snapshot. The
+  files are kept verbatim, so the em-dash and bare-launcher style gates
+  (`tests/test_no_em_dash.py`, `tests/test_hosted_plugin_layout.py`) skip `docs/archive/`.
+
 - One URL-safety rule across CONTRIBUTING.md, CLAUDE.md, AGENTS.md,
   SECURITY.md and the seo-drift and seo-ecommerce skills: a script that
   opens a socket calls `validate_url_strict()` and fetches through the

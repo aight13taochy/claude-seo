@@ -52,7 +52,9 @@ def _instruction_docs() -> list[str]:
     for rel in _tracked():
         if not rel.endswith(".md") or rel in DOC_EXCLUSIONS:
             continue
-        if rel.startswith(("research/", ".github/", "tests/")):
+        # docs/archive/ holds dated snapshots kept verbatim; their prose
+        # names the launcher in past discussion rather than invoking it.
+        if rel.startswith(("research/", ".github/", "tests/", "docs/archive/")):
             continue
         if rel.startswith(("skills/", "agents/", "docs/", "extensions/")) or "/" not in rel:
             docs.append(rel)
