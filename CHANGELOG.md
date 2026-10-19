@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows ledger lock in `scripts/dataforseo_costs.py` and
+  `extensions/banana/scripts/cost_tracker.py`: `msvcrt.LK_LOCK` gives up
+  after 10 one-second retries and raises `OSError`, so under contention a
+  concurrent writer could crash instead of waiting (seen as an intermittent
+  `test_banana_cost_tracker.py` failure on the Windows runner). The lock now
+  polls `LK_NBLCK` every 50-100 ms for up to `LOCK_TIMEOUT_SECONDS` (60 s)
+  and then raises `LedgerError` with a clear message. The POSIX `fcntl` path
+  is unchanged.
+
 - Windows installer smoke workflow on forks and mirrors: on a pull request
   it checked the head branch against, and `install.ps1` cloned from, the
   hard-coded upstream repository, where a fork's branch does not exist, so
