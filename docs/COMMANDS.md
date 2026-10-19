@@ -19,9 +19,16 @@ retrieval. Both the raw path (default, `--render never`) and the rendered path
 Fetch errors still emit JSON and exit 1; successful fetches exit 0. HTTP status
 codes are reported without changing this behavior.
 
-Pass `--max-text N` to cap the `content`, `raw_content`, and `extracted_text`
-fields at N characters each; `truncation.fields` reports the original and
-returned character counts per field. `--max-text 0` (default) keeps full text.
+The short fields come first and the three long ones last, in the order
+`extracted_text`, `content`, `raw_content`, so a reader that only sees the start
+of the output still gets the status, `is_spa`, `structured_data` and the text.
+`extracted_text` is returned whole. The raw HTML fields (`content`,
+`raw_content`) are capped at 2,000 characters by default; pass `--max-html 0`
+for the full HTML, or `--max-html N` for another cap. Pass `--max-text N` to cap
+all three fields at N characters each (the smaller of `--max-text` and
+`--max-html` applies to the HTML). `truncation.limit` and `truncation.html_limit`
+record the caps, and `truncation.fields` the original and returned character
+counts per field.
 
 Combine `--json --output page.html` to save successful HTML while keeping JSON
 on stdout. `output_written` indicates whether HTML was saved. On fetch errors,

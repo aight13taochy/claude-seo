@@ -647,7 +647,7 @@ def test_cdp_detach_failure_does_not_discard_captured_tree() -> None:
     assert partial is False
 
 
-def test_json_summary_is_full_by_default_and_explicit_when_bounded() -> None:
+def test_json_summary_keeps_short_fields_whole_and_is_explicit_when_bounded() -> None:
     result = {
         "content": "c" * 12,
         "raw_content": "r" * 8,
@@ -656,6 +656,7 @@ def test_json_summary_is_full_by_default_and_explicit_when_bounded() -> None:
     full = render_page._json_summary(result)
     assert full["content"] == result["content"]
     assert full["truncation"]["limit"] is None
+    assert full["truncation"]["html_limit"] == render_page.DEFAULT_MAX_HTML
     assert full["truncation"]["fields"]["content"]["truncated"] is False
 
     bounded = render_page._json_summary(result, max_text=5)
@@ -666,6 +667,79 @@ def test_json_summary_is_full_by_default_and_explicit_when_bounded() -> None:
         "returned_chars": 5,
         "truncated": True,
     }
+
+
+def _large_page_result(html_kb: int = 300) -> dict:
+    html = "<html><body>" + "x" * (html_kb * 1024) + "</body></html>"
+    return {
+        "url": "https://example.test/",
+        "status_code": 200,
+        "content": html,
+        "raw_content": html,
+        "is_spa": False,
+        "extracted_text": "word " * 3000,
+        "publication_date": "2026-10-01",
+        "error": None,
+    }
+
+
+def test_json_summary_caps_raw_html_but_never_extracted_text_by_default() -> None:
+    result = _large_page_result()
+    summary = render_page._json_summary(result)
+    cap = render_page.DEFAULT_MAX_HTML
+    assert summary["content"] == result["content"][:cap]
+    assert summary["raw_content"] == result["raw_content"][:cap]
+    assert summary["extracted_text"] == result["extracted_text"]
+    fields = summary["truncation"]["fields"]
+    assert fields["content"] == {
+        "original_chars": len(result["content"]),
+        "returned_chars": cap,
+        "truncated": True,
+    }
+    assert fields["extracted_text"]["truncated"] is False
+
+
+def test_json_summary_max_html_zero_keeps_full_html_and_max_text_still_wins() -> None:
+    result = _large_page_result(html_kb=5)
+    full = render_page._json_summary(result, max_html=0)
+    assert full["content"] == result["content"]
+    assert full["truncation"]["html_limit"] is None
+
+    # A --max-text smaller than the HTML cap bounds every field, as before.
+    bounded = render_page._json_summary(result, max_text=100, max_html=0)
+    assert len(bounded["content"]) == 100
+    assert len(bounded["extracted_text"]) == 100
+    assert bounded["truncation"]["html_limit"] == 100
+
+
+def test_json_output_puts_extracted_text_ahead_of_the_html() -> None:
+    """A tool result cut at ~30k characters must still show what agents score."""
+    result = _large_page_result(html_kb=300)
+    text = json.dumps(render_page._json_summary(result, max_html=0), indent=2, default=str)
+    result["accessibility_tree"] = {"role": "RootWebArea", "children": []}
+    keys = list(render_page._json_summary(result, max_html=0))
+    assert keys[-4:] == ["extracted_text", "accessibility_tree", "content", "raw_content"]
+    for short_field in ("status_code", "is_spa", "publication_date", "structured_data", "truncation"):
+        assert keys.index(short_field) < keys.index("extracted_text")
+
+    default_text = json.dumps(render_page._json_summary(result), indent=2, default=str)
+    assert len(default_text) < 30_000
+    assert '"extracted_text"' in default_text[:30_000]
+    assert '"extracted_text"' in text[:30_000]
+
+
+def test_cli_max_html_reaches_the_json_summary(monkeypatch, capsys) -> None:
+    result = _large_page_result(html_kb=5)
+    monkeypatch.setattr(render_page, "render_page", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(
+        sys, "argv", ["render_page.py", "https://example.test/", "--json", "--max-html", "0"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        render_page._cli()
+    assert exc.value.code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["content"] == result["content"]
+    assert payload["truncation"]["html_limit"] is None
 
 
 def test_json_and_output_are_composable(tmp_path, monkeypatch, capsys) -> None:

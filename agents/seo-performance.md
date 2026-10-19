@@ -25,7 +25,7 @@ Google evaluates the **75th percentile** of page visits, 75% of visits must meet
 ## When Analyzing Performance
 
 1. Use PageSpeed Insights API if available
-2. Use `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run render_page.py <URL> --mode auto --json` before HTML/source inspection so SPA content is visible when needed
+2. Use `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run render_page.py <URL> --mode auto --json` before HTML/source inspection so SPA content is visible when needed; add `--max-html 0` (or `--output page.html`) when you need more than the first 2,000 characters of HTML
 3. Provide specific, actionable optimization recommendations
 4. Prioritize by expected impact
 

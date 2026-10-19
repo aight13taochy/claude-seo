@@ -141,6 +141,31 @@ def test_json_max_text_truncates_content_fields(mode, monkeypatch, capsys):
     assert payload["truncation"]["fields"]["content"]["original_chars"] == len(_CONTENT)
 
 
+@pytest.mark.parametrize("mode", ["never", "always"])
+@pytest.mark.parametrize(
+    ("extra_args", "expected_chars"),
+    [([], render_page.DEFAULT_MAX_HTML), (["--max-html", "0"], len(_CONTENT)), (["--max-html", "50"], 50)],
+)
+def test_json_caps_raw_html_by_default_and_honours_max_html(
+    mode, extra_args, expected_chars, monkeypatch, capsys
+):
+    if mode == "never":
+        monkeypatch.setattr(fetch_page, "fetch_page", lambda *a, **kw: dict(RAW_RESULT))
+    else:
+        monkeypatch.setattr(render_page, "render_page", lambda *a, **kw: dict(RENDERED_RESULT))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fetch_page.py", "https://example.com", "--render", mode, "--json", *extra_args],
+    )
+    with pytest.raises(SystemExit) as exc:
+        fetch_page.main()
+    assert exc.value.code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["content"] == _CONTENT[:expected_chars]
+    assert payload["truncation"]["fields"]["content"]["original_chars"] == len(_CONTENT)
+
+
 def test_json_fetch_error_preserves_existing_file(fetch_result, tmp_path, capsys):
     fetch_result.update(error="Request timed out", content=None, status_code=None)
     output = tmp_path / "page.html"

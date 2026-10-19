@@ -629,30 +629,58 @@ def _non_negative_int(value: str) -> int:
     return parsed
 
 
-def _json_summary(result: dict, *, max_text: int = 0) -> dict:
+# Default cap on the two raw-HTML fields in --json output. Agents read this
+# JSON from a tool result: uncapped, a 300 KB page prints ~600 KB (the HTML
+# twice) ahead of extracted_text, which a truncated tool result then never
+# shows. Pass --max-html 0, or --output, for the full document.
+DEFAULT_MAX_HTML = 2000
+
+# Fields that can run to hundreds of KB, emitted last so every short field
+# (status, is_spa, publication_date, structured_data, truncation) comes first,
+# then the extracted text, then the opt-in accessibility tree, then the HTML.
+_JSON_TAIL_FIELDS = ("extracted_text", "accessibility_tree", "content", "raw_content")
+
+
+def _json_summary(result: dict, *, max_text: int = 0, max_html: int = DEFAULT_MAX_HTML) -> dict:
     """Return an explicit, machine-readable JSON output contract.
 
-    ``max_text=0`` preserves every textual field. Positive values truncate
-    content fields and record the original and returned character counts.
+    ``extracted_text`` is kept whole unless ``max_text`` is positive. The raw
+    HTML fields (``content``, ``raw_content``) are capped at ``max_html``
+    characters by default, or at ``max_text`` when that is smaller;
+    ``max_html=0`` and ``max_text=0`` together keep them whole. Every cap is
+    recorded with the original and returned character counts.
     """
-    summary = dict(result)
     full_content = result.get("content") or result.get("raw_content") or ""
+    html_limits = [limit for limit in (max_html, max_text) if limit > 0]
+    html_limit = min(html_limits) if html_limits else 0
+    field_limits = {
+        "extracted_text": max_text,
+        "accessibility_tree": 0,
+        "content": html_limit,
+        "raw_content": html_limit,
+    }
+
+    summary = {key: value for key, value in result.items() if key not in _JSON_TAIL_FIELDS}
     summary["structured_data"] = _extract_json_ld(full_content)
-    truncation = {"limit": max_text or None, "fields": {}}
-    for field in ("content", "raw_content", "extracted_text"):
-        value = summary.get(field)
+    truncation = {"limit": max_text or None, "html_limit": html_limit or None, "fields": {}}
+    summary["truncation"] = truncation
+    for field in _JSON_TAIL_FIELDS:
+        if field not in result:
+            continue
+        value = result[field]
+        summary[field] = value
         if not isinstance(value, str):
             continue
+        limit = field_limits[field]
         original_chars = len(value)
-        truncated = max_text > 0 and original_chars > max_text
+        truncated = limit > 0 and original_chars > limit
         if truncated:
-            summary[field] = value[:max_text]
+            summary[field] = value[:limit]
         truncation["fields"][field] = {
             "original_chars": original_chars,
             "returned_chars": len(summary[field]),
             "truncated": truncated,
         }
-    summary["truncation"] = truncation
     return summary
 
 
@@ -697,15 +725,27 @@ def _cli() -> None:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="emit JSON with full content fields unless --max-text is set",
+        help=(
+            "emit JSON: full extracted_text, raw HTML capped by --max-html; "
+            "short fields come first"
+        ),
     )
     parser.add_argument(
         "--max-text",
         type=_non_negative_int,
         default=0,
         help=(
-            "maximum characters returned for each JSON content field; "
-            "0 keeps full text (default: 0)"
+            "maximum characters returned for each JSON content field, "
+            "extracted_text included; 0 keeps full text (default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--max-html",
+        type=_non_negative_int,
+        default=DEFAULT_MAX_HTML,
+        help=(
+            "maximum characters returned for the raw HTML JSON fields "
+            f"(content, raw_content); 0 keeps full HTML (default: {DEFAULT_MAX_HTML})"
         ),
     )
     parser.add_argument(
@@ -742,8 +782,10 @@ def _cli() -> None:
         output_written = True
 
     if args.json:
-        summary = _json_summary(res, max_text=args.max_text)
-        summary["output_written"] = output_written
+        summary = {
+            "output_written": output_written,
+            **_json_summary(res, max_text=args.max_text, max_html=args.max_html),
+        }
         print(json.dumps(summary, indent=2, default=str))
         sys.exit(1 if res["error"] else 0)
 

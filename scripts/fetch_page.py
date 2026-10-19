@@ -199,22 +199,31 @@ def _as_render_result(result: dict, *, mode_used: str) -> dict:
     }
 
 
-def _emit_json(result: dict, output: Optional[str], *, max_text: int = 0) -> None:
+def _emit_json(
+    result: dict, output: Optional[str], *, max_text: int = 0, max_html: Optional[int] = None
+) -> None:
     """Emit a fetch result as JSON via ``render_page._json_summary``.
 
     Both the raw and rendered fetch paths are normalized onto the render_page
     result contract before this is called, so the emitted JSON has an
-    identical key set (and honours ``--max-text``) regardless of ``--render``.
+    identical key set (and honours ``--max-text`` and ``--max-html``)
+    regardless of ``--render``.
     """
-    from render_page import _json_summary
+    from render_page import DEFAULT_MAX_HTML, _json_summary
 
     output_written = False
     if output and not result.get("error"):
         with open(output, "w", encoding="utf-8") as f:
             f.write(result.get("content") or "")
         output_written = True
-    summary = _json_summary(result, max_text=max_text)
-    summary["output_written"] = output_written
+    summary = {
+        "output_written": output_written,
+        **_json_summary(
+            result,
+            max_text=max_text,
+            max_html=DEFAULT_MAX_HTML if max_html is None else max_html,
+        ),
+    }
     print(json.dumps(summary, indent=2, default=str))
     sys.exit(1 if result.get("error") else 0)
 
@@ -223,7 +232,7 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch a web page for SEO analysis")
     parser.add_argument("url", help="URL to fetch")
     parser.add_argument("--output", "-o", help="Output file path")
-    parser.add_argument("--json", action="store_true", help="Emit full fetch result as JSON")
+    parser.add_argument("--json", action="store_true", help="Emit the fetch result as JSON (raw HTML capped by --max-html)")
     parser.add_argument(
         "--max-text",
         type=_non_negative_int,
@@ -232,6 +241,16 @@ def main():
             "maximum characters returned for each JSON content field "
             "(content, raw_content, extracted_text); 0 keeps full text "
             "(default: 0). Only applies with --json."
+        ),
+    )
+    parser.add_argument(
+        "--max-html",
+        type=_non_negative_int,
+        default=None,
+        help=(
+            "maximum characters returned for the raw HTML JSON fields "
+            "(content, raw_content); 0 keeps full HTML (default: render_page's "
+            "DEFAULT_MAX_HTML, 2000). Only applies with --json."
         ),
     )
     parser.add_argument("--timeout", "-t", type=int, default=30, help="Timeout in seconds")
@@ -273,7 +292,7 @@ def main():
             user_agent=ua,
         )
         if args.json:
-            _emit_json(rendered, args.output, max_text=args.max_text)
+            _emit_json(rendered, args.output, max_text=args.max_text, max_html=args.max_html)
         if rendered["error"]:
             print(f"Error: {rendered['error']}", file=sys.stderr)
             sys.exit(1)
@@ -303,6 +322,7 @@ def main():
             _as_render_result(result, mode_used="raw"),
             args.output,
             max_text=args.max_text,
+            max_html=args.max_html,
         )
 
     if result["error"]:
