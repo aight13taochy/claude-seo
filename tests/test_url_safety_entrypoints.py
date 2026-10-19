@@ -185,6 +185,24 @@ def test_every_chromium_launch_guards_routes_and_redirect_hops() -> None:
         assert _calls_named(tree, "check_redirects"), (
             f"{name} never calls check_redirects()"
         )
+        # page.route() and page.on() miss every popup the page opens with
+        # window.open(): the guard must sit on the browser context.
+        contexts = {
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "new_context"
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        for call in routes + watches:
+            receiver = call.func.value
+            assert isinstance(receiver, ast.Name) and receiver.id in contexts, (
+                f"{name}:{call.lineno} guards a page, not its browser context; "
+                "popups opened with window.open() would escape the handler"
+            )
         checked.append(name)
     assert len(checked) >= 3, f"expected the known launch sites, found {checked}"
 

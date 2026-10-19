@@ -135,9 +135,10 @@ def capture_screenshot(
             page = context.new_page()
 
             # Defence in depth: abort any subresource that lands on a
-            # private IP even after Chromium re-resolves DNS.
-            page.route("**/*", route_handler)
-            page.on("request", route_handler.watch_request)
+            # private IP even after Chromium re-resolves DNS. On the context,
+            # not the page, so a window.open() popup is guarded too.
+            context.route("**/*", route_handler)
+            context.on("request", route_handler.watch_request)
 
             # Navigate and wait for network idle
             page.goto(url, wait_until="networkidle", timeout=timeout)
