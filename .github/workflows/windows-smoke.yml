@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ref: ${{ steps.ref.outputs.ref }}
+      repo_url: ${{ steps.ref.outputs.repo_url }}
     steps:
       - id: ref
         name: Validate released source ref
@@ -43,6 +44,10 @@ jobs:
           # test is the one in the PR rather than the previous release.
           TARGET_REF: ${{ inputs.target_ref || github.head_ref || 'v2.4.2' }}
           EVENT_NAME: ${{ github.event_name }}
+          # Releases are published from the upstream repository. A pull
+          # request's head branch lives in the repository running this
+          # workflow, which differs from upstream on a fork or mirror.
+          SOURCE_REPO: ${{ github.event_name == 'pull_request' && github.repository || 'AgriciDaniel/claude-seo' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -50,10 +55,11 @@ jobs:
             echo "::error::target_ref must be main or a stable vX.Y.Z tag."
             exit 1
           fi
-          git ls-remote --exit-code --refs \
-            https://github.com/AgriciDaniel/claude-seo.git \
+          repo_url="https://github.com/${SOURCE_REPO}"
+          git ls-remote --exit-code --refs "${repo_url}.git" \
             "refs/heads/$TARGET_REF" "refs/tags/$TARGET_REF" >/dev/null
           printf 'ref=%s\n' "$TARGET_REF" >> "$GITHUB_OUTPUT"
+          printf 'repo_url=%s\n' "$repo_url" >> "$GITHUB_OUTPUT"
 
   smoke:
     name: Windows install, runtime, uninstall
@@ -106,6 +112,7 @@ jobs:
         shell: pwsh
         env:
           CLAUDE_SEO_TAG: ${{ needs.validate-ref.outputs.ref }}
+          CLAUDE_SEO_REPO_URL: ${{ needs.validate-ref.outputs.repo_url }}
         run: |
           $ErrorActionPreference = "Stop"
           ./install.ps1
@@ -237,6 +244,7 @@ jobs:
         shell: powershell
         env:
           CLAUDE_SEO_TAG: ${{ needs.validate-ref.outputs.ref }}
+          CLAUDE_SEO_REPO_URL: ${{ needs.validate-ref.outputs.repo_url }}
         run: |
           $ErrorActionPreference = "Stop"
           ./install.ps1
