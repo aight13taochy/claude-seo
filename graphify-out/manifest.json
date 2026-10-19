@@ -492,10 +492,10 @@
     "semantic_hash": "21da81db34b13e79ee2d24d62acf099f"
   },
   "scripts/consistency_check.py": {
-    "mtime": 1792390937.1740096,
-    "seen": 1792391796.4560266,
-    "ast_hash": "38f6188ff342647f5cc691b465464acf",
-    "semantic_hash": "38f6188ff342647f5cc691b465464acf"
+    "mtime": 1792391896.107468,
+    "seen": 1792427975.0652502,
+    "ast_hash": "8a43452c9538edf8bce20be77f355db6",
+    "semantic_hash": "8a43452c9538edf8bce20be77f355db6"
   },
   "scripts/content_humanize.py": {
     "mtime": 1792390937.1740096,
@@ -1308,10 +1308,10 @@
     "semantic_hash": "7a2ca7487d93d799cfe635a3117d5f09"
   },
   "CHANGELOG.md": {
-    "mtime": 1792390937.1295922,
-    "seen": 1792391796.4562585,
-    "ast_hash": "fed53bd95bafbc4f1780884f0061cdc9",
-    "semantic_hash": "fed53bd95bafbc4f1780884f0061cdc9"
+    "mtime": 1792426933.151797,
+    "seen": 1792427975.0654693,
+    "ast_hash": "327edda788dc179fce413372235dcf6b",
+    "semantic_hash": "327edda788dc179fce413372235dcf6b"
   },
   "CLAUDE.md": {
     "mtime": 1792390937.1295922,
@@ -1374,10 +1374,10 @@
     "semantic_hash": "74b67ea412c5702004f2c01911fe9d0b"
   },
   "agents/seo-content.md": {
-    "mtime": 1792390937.1331275,
-    "seen": 1792391796.4562695,
-    "ast_hash": "09e55193f4d5b7a39afd6aa3822fadd9",
-    "semantic_hash": "09e55193f4d5b7a39afd6aa3822fadd9"
+    "mtime": 1792426933.1503048,
+    "seen": 1792427975.065471,
+    "ast_hash": "c19a1d8443fe1a33c318e568bbde9a02",
+    "semantic_hash": "c19a1d8443fe1a33c318e568bbde9a02"
   },
   "agents/seo-dataforseo.md": {
     "mtime": 1792390937.1331275,
@@ -1926,10 +1926,10 @@
     "semantic_hash": "c6f170069a37235aa3696507dbfaef2f"
   },
   "skills/seo-content/SKILL.md": {
-    "mtime": 1792390937.1864204,
-    "seen": 1792391796.456367,
-    "ast_hash": "b89a633e82dcebb8cb0c0690d5c0881d",
-    "semantic_hash": "b89a633e82dcebb8cb0c0690d5c0881d"
+    "mtime": 1792426933.1483245,
+    "seen": 1792427975.0654736,
+    "ast_hash": "7f99f2a3018572fe23a305957db8667c",
+    "semantic_hash": "7f99f2a3018572fe23a305957db8667c"
   },
   "skills/seo-dataforseo/LICENSE.txt": {
     "mtime": 1792390937.1864204,
