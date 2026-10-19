@@ -110,6 +110,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `seo-image-gen` model reference: `gemini-2.5-flash-image` shuts down
+  2027-03-15, not 2026-10-02 (2025-10-02 is its release date), and Google's
+  named replacement is `gemini-3.1-flash-lite-image`. The reference now lists
+  the stable image models Google's deprecations page shows on 2026-10-12,
+  including `gemini-nano-banana-2.1`, the recommended replacement for
+  `gemini-3.1-flash-image`. A canonical-facts test keeps the wrong date out.
+
 - Refused redirect hops are now stopped before Chromium sends them.
   Playwright never calls a route handler for a 30x hop, so the previous fix
   could only discard a render after the hop request had reached its target
