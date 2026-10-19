@@ -19,6 +19,7 @@ runs in a real Node process when ``node`` is on PATH.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -69,11 +70,21 @@ def _run_captured(monkeypatch, tmp_path, pinned_ip, base_env=None):
     return config, seen["env"]
 
 
-def test_chromium_gets_the_host_resolver_pin(monkeypatch, tmp_path):
+def test_chromium_gets_the_host_resolver_pin_and_the_egress_proxy(monkeypatch, tmp_path):
     config, _ = _run_captured(monkeypatch, tmp_path, "93.184.215.14")
-    assert config["puppeteerOptions"]["args"] == [
-        "--host-resolver-rules=MAP example.com 93.184.215.14"
-    ]
+    args = config["puppeteerOptions"]["args"]
+    assert args[0] == "--host-resolver-rules=MAP example.com 93.184.215.14"
+    assert re.fullmatch(r"--proxy-server=http://127\.0\.0\.1:\d+", args[1])
+    # Without this, Chromium sends localhost and 127.0.0.1 around the proxy.
+    assert "--proxy-bypass-list=<-loopback>" in args
+    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args
+
+
+def test_node_guard_knows_the_audited_port(monkeypatch, tmp_path):
+    _, env = _run_captured(monkeypatch, tmp_path, "93.184.215.14")
+    assert env["CLAUDE_SEO_PIN_PORT"] == "443"
+    env = ul.build_guard_env("http://localhost:3000/", "127.0.0.1", {})
+    assert env["CLAUDE_SEO_PIN_PORT"] == "3000"
 
 
 def test_node_processes_preload_the_guard(monkeypatch, tmp_path):
@@ -94,7 +105,7 @@ def test_existing_node_options_and_proxies_are_kept(monkeypatch, tmp_path):
         },
     )
     assert env["NODE_OPTIONS"].startswith("--max-old-space-size=4096 --require ")
-    assert env["CLAUDE_SEO_NET_ALLOW"].split(",") == ["10.1.2.3", "proxy.corp.internal"]
+    assert env["CLAUDE_SEO_NET_ALLOW"].split(",") == ["10.1.2.3:8080", "proxy.corp.internal:3128"]
 
 
 def test_proxy_variables_are_found_whatever_their_case():
@@ -103,7 +114,7 @@ def test_proxy_variables_are_found_whatever_their_case():
         "https_proxy": "http://lower.example:2",
         "UNRELATED": "http://not-a-proxy.example",
     })
-    assert env["CLAUDE_SEO_NET_ALLOW"] == "lower.example,upper.example"
+    assert env["CLAUDE_SEO_NET_ALLOW"] == "lower.example:2,upper.example:1"
 
 
 def test_trusted_proxy_mode_applies_no_pin(monkeypatch, tmp_path):
@@ -162,12 +173,17 @@ def test_node_loads_the_quoted_require_path(tmp_path):
 
 # Stubs dns.lookup before the guard captures it, so hostnames can "resolve"
 # anywhere without real DNS; connections are judged before any packet leaves.
+# Three real loopback servers stand in for Chromium's DevTools port (named by
+# --port=, as a Lighthouse worker gets it), a DevTools port announced on a
+# spawned child's stderr (as Chromium announces it to Puppeteer), and an
+# unrelated local service a crawled page might redirect to.
 _PROBE = r"""
+const childProcess = require('child_process');
 const dns = require('dns');
 const net = require('net');
 const fake = { 'evil.test': '10.0.0.5', 'rebind.test': '127.0.0.1',
                'public.test': '93.184.215.14', 'localhost': '127.0.0.1',
-               'proxy.internal': '10.9.9.9' };
+               'proxy.internal': '10.9.9.9', 'audited.test': '10.1.1.1' };
 dns.lookup = (host, opts, cb) => {
   if (typeof opts === 'function') { cb = opts; opts = {}; }
   const address = net.isIP(host) ? host : fake[host];
@@ -175,7 +191,9 @@ dns.lookup = (host, opts, cb) => {
   const entry = { address, family: net.isIP(address) };
   process.nextTick(() => opts.all ? cb(null, [entry]) : cb(null, address, entry.family));
 };
-require(process.env.GUARD_PATH).install(process.env);
+const listen = () => new Promise((res) => {
+  const server = net.createServer((s) => s.end()).listen(0, '127.0.0.1', () => res(server));
+});
 const lookup = (h) => new Promise((res) => dns.lookup(h, (e, a) => res(e ? e.code : a)));
 const connect = (port, host) => new Promise((res) => {
   const s = net.connect(port, host);
@@ -183,30 +201,49 @@ const connect = (port, host) => new Promise((res) => {
   s.on('connect', () => { s.destroy(); res('connected'); });
 });
 (async () => {
-  const server = net.createServer((s) => s.end()).listen(0, '127.0.0.1');
-  await new Promise((r) => server.on('listening', r));
-  const port = server.address().port;
+  const [argvDevtools, spawnedDevtools, service] = await Promise.all([listen(), listen(), listen()]);
+  const port = (server) => server.address().port;
+  const pinPort = Number(process.env.PIN_PORT_FROM_SERVICE) ? port(service) : 0;
+  require(process.env.GUARD_PATH).install(
+    { ...process.env, CLAUDE_SEO_PIN_PORT: String(pinPort) },
+    ['node', 'lighthouse.mjs', `--port=${port(argvDevtools)}`],
+  );
+  const child = childProcess.spawn(process.execPath, ['-e',
+    `console.error('DevTools listening on ws://127.0.0.1:${port(spawnedDevtools)}/devtools/browser/x')`]);
+  child.stderr.on('data', () => {});
+  await new Promise((res) => child.on('close', res));
   const out = {
     pinned: await lookup('audited.test'),
     pinnedPromise: (await dns.promises.lookup('audited.test')).address,
     evil: await lookup('evil.test'),
-    rebindToLoopback: await lookup('rebind.test'),
-    localhost: await lookup('localhost'),
     public: await lookup('public.test'),
     allowedProxy: await lookup('proxy.internal'),
     metadataLiteral: await connect(80, '169.254.169.254'),
     mappedLiteral: await connect(80, '::ffff:169.254.169.254'),
     rfc1918Literal: await connect(80, '192.168.1.1'),
-    loopbackLiteral: await connect(port, '127.0.0.1'),
     metadataLiteralLookup: await lookup('169.254.169.254'),
+    devtoolsFromArgv: await connect(port(argvDevtools), '127.0.0.1'),
+    devtoolsFromStderr: await connect(port(spawnedDevtools), '127.0.0.1'),
+    devtoolsByName: await connect(port(argvDevtools), 'localhost'),
+    serviceLiteral: await connect(port(service), '127.0.0.1'),
+    serviceByLocalhost: await connect(port(service), 'localhost'),
+    serviceByRebind: await connect(port(service), 'rebind.test'),
+    serviceMappedV6: await connect(port(service), '::ffff:127.0.0.1'),
+    loopbackProxyPort: await connect(Number(process.env.ALLOWED_PROXY_PORT), '127.0.0.1'),
+    serviceBesideLoopbackProxy: await connect(port(service), '127.0.0.1'),
   };
-  server.close();
+  for (const server of [argvDevtools, spawnedDevtools, service]) server.close();
   process.stdout.write(JSON.stringify(out));
 })();
 """
 
 
-def _run_guard_probe(pin_ip="93.184.215.14"):
+# A proxy configured on loopback (as in sandboxes) is allowed on its own
+# port; nothing listens there, so an allowed connection reads ECONNREFUSED.
+ALLOWED_PROXY_PORT = 9
+
+
+def _run_guard_probe(pin_ip="93.184.215.14", pin_service_port=False):
     proc = subprocess.run(
         [NODE, "-e", _PROBE],
         env={
@@ -214,7 +251,9 @@ def _run_guard_probe(pin_ip="93.184.215.14"):
             "GUARD_PATH": str(GUARD),
             "CLAUDE_SEO_PIN_HOST": "audited.test",
             "CLAUDE_SEO_PIN_IP": pin_ip,
-            "CLAUDE_SEO_NET_ALLOW": "proxy.internal",
+            "CLAUDE_SEO_NET_ALLOW": f"proxy.internal:3128,127.0.0.1:{ALLOWED_PROXY_PORT}",
+            "PIN_PORT_FROM_SERVICE": "1" if pin_service_port else "0",
+            "ALLOWED_PROXY_PORT": str(ALLOWED_PROXY_PORT),
         },
         capture_output=True, text=True, timeout=60, check=False,
     )
@@ -228,20 +267,50 @@ def test_guard_pins_the_audited_host_and_blocks_private_resolutions():
     assert out["pinned"] == "93.184.215.14"
     assert out["pinnedPromise"] == "93.184.215.14"
     assert out["evil"] == "ECLAUDESEOBLOCKED"
-    assert out["rebindToLoopback"] == "ECLAUDESEOBLOCKED"
-    assert out["localhost"] == "127.0.0.1"
     assert out["public"] == "93.184.215.14"
     assert out["allowedProxy"] == "10.9.9.9"
 
 
 @needs_node
-def test_guard_blocks_private_ip_literals_but_keeps_devtools_loopback():
+def test_guard_blocks_private_ip_literals():
     out = _run_guard_probe()
     assert out["metadataLiteral"] == "ECLAUDESEOBLOCKED"
     assert out["mappedLiteral"] == "ECLAUDESEOBLOCKED"
     assert out["rfc1918Literal"] == "ECLAUDESEOBLOCKED"
-    assert out["loopbackLiteral"] == "connected"
     assert out["metadataLiteralLookup"] == "ECLAUDESEOBLOCKED"
+
+
+@needs_node
+def test_guard_keeps_only_chromium_devtools_ports_on_loopback():
+    """Puppeteer and Lighthouse reach Chromium; a redirect to any other
+    local service is refused, by literal, by name, or through rebinding."""
+    out = _run_guard_probe()
+    assert out["devtoolsFromArgv"] == "connected"
+    assert out["devtoolsFromStderr"] == "connected"
+    assert out["devtoolsByName"] == "connected"
+    assert out["serviceLiteral"] == "ECLAUDESEOBLOCKED"
+    assert out["serviceByLocalhost"] == "ECLAUDESEOBLOCKED"
+    assert out["serviceByRebind"] == "ECLAUDESEOBLOCKED"
+    assert out["serviceMappedV6"] == "ECLAUDESEOBLOCKED"
+
+
+@needs_node
+def test_a_loopback_proxy_opens_its_own_port_only():
+    """CLAUDE_SEO_NET_ALLOW is host:port: a proxy on 127.0.0.1 does not open
+    every local port (the hole a host-only allowance left)."""
+    out = _run_guard_probe()
+    assert out["loopbackProxyPort"] == "ECONNREFUSED"  # allowed, nothing listening
+    assert out["serviceBesideLoopbackProxy"] == "ECLAUDESEOBLOCKED"
+
+
+@needs_node
+def test_allowlisted_local_target_is_reachable_on_its_own_port_only():
+    """A CLAUDE_SEO_LOCAL_TARGETS pin (127.0.0.1) opens that port, nothing else."""
+    out = _run_guard_probe(pin_ip="127.0.0.1", pin_service_port=True)
+    assert out["serviceLiteral"] == "connected"
+    assert out["devtoolsFromArgv"] == "connected"
+    no_pin_port = _run_guard_probe(pin_ip="127.0.0.1", pin_service_port=False)
+    assert no_pin_port["serviceLiteral"] == "ECLAUDESEOBLOCKED"
 
 
 @needs_node
