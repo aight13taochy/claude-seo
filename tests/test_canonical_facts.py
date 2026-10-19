@@ -77,6 +77,8 @@ WRONG = [
      "developers.google.com/webmaster-tools/v1/urlInspection.index/UrlInspectionResult"),
     (r"Nano Banana 2 \(Flash, previous gen\)", "gemini-2.5-flash-image is the original Nano Banana",
      "ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-image"),
+    (r"2026-10-02", "gemini-2.5-flash-image shuts down 2027-03-15; 2025-10-02 was its release date",
+     "ai.google.dev/gemini-api/docs/deprecations"),
     (r"\*\*18-day rule\*\*", "a single Sterling Sky case example, not a rule",
      "sterlingsky.ca/what-gets-you-ranking-for-near-me-2025"),
     (r"December 2025 JS SEO guidance, structured data injected via JavaScript may face delayed",

@@ -1,15 +1,24 @@
 # Gemini Image Generation Models
 
-> Checked 2026-09-29 against ai.google.dev/gemini-api/docs/deprecations: the
-> `-preview` image IDs shut down 2026-06-25 and `gemini-2.5-flash-image` shuts
-> down 2026-10-02. If the MCP package defaults to a retired ID, set the model.
+> Checked 2026-10-19 against ai.google.dev/gemini-api/docs/deprecations (page
+> dated 2026-10-12): the `-preview` image IDs shut down 2026-06-25 and
+> `gemini-2.5-flash-image` shuts down 2027-03-15 (it was released 2025-10-02).
+> If the MCP package defaults to a retired ID, set the model; confirm the
+> installed package accepts an ID before setting it.
 
 ## Current Models
+
+| Model ID | Released | Notes |
+|----------|----------|-------|
+| `gemini-nano-banana-2.1` | 2026-10-06 | Google's recommended replacement for `gemini-3.1-flash-image` and the retired previews. Capabilities not covered here: check the model page before relying on a ratio or resolution tier |
+| `gemini-3.1-flash-lite-image` | 2026-06-30 | Google's recommended replacement for `gemini-2.5-flash-image`. Capabilities not covered here |
+| `gemini-3.1-flash-image` | 2026-05-28 | Nano Banana 2, detailed below |
+| `gemini-3-pro-image` | 2026-05-28 | Nano Banana Pro (professional assets, 4K output, 14 reference images); replaces `gemini-3-pro-image-preview` |
 
 ### gemini-3.1-flash-image (Nano Banana 2)
 | Property | Value |
 |----------|-------|
-| **Model ID** | `gemini-3.1-flash-image` (replaces `gemini-3.1-flash-image-preview`, shut down 2026-06-25) |
+| **Model ID** | `gemini-3.1-flash-image` (replaces `gemini-3.1-flash-image-preview`, shut down 2026-06-25). No shutdown date announced; Google recommends `gemini-nano-banana-2.1` for new work |
 | **Tier** | Nano Banana 2 (Flash) |
 | **Speed** | Fast - optimized for high-volume use |
 | **Aspect Ratios** | All 14 ratios (see table below) |
@@ -23,20 +32,16 @@
 | Property | Value |
 |----------|-------|
 | **Model ID** | `gemini-2.5-flash-image` |
-| **Tier** | Nano Banana (original Flash image model; previous gen). **Shuts down 2026-10-02**; Google names `gemini-3.1-flash-image` as the replacement |
+| **Tier** | Nano Banana (original Flash image model; previous gen). **Shuts down 2027-03-15**; Google names `gemini-3.1-flash-lite-image` as the replacement |
 | **Speed** | Fast |
 | **Aspect Ratios** | 1:1, 16:9, 9:16, 4:3, 3:4 |
 | **Max Resolution** | Up to 1024×1024 (1K tier) |
 | **Rate Limits (Free)** | ~10 RPM / ~500 RPD |
-| **Best For** | Nothing new: migrate existing uses before 2026-10-02 |
+| **Best For** | Nothing new: migrate existing uses before 2027-03-15 |
 
-## Deprecated Models (DO NOT USE)
+## Retired Models (DO NOT USE)
 
-### gemini-3-pro-image-preview
-- **Status:** Shut down 2026-06-25 (ai.google.dev/gemini-api/docs/deprecations). The text model `gemini-3-pro-preview` is a different model with its own date (2026-03-09). Prefer 3.1 Flash.
-- **Was:** Nano Banana Pro tier (professional asset production, 4K output, 14 reference images)
-- **Migration:** Use `gemini-3-pro-image` (Google's named replacement) or `gemini-3.1-flash-image`
-
+- **`gemini-3-pro-image-preview`:** shut down 2026-06-25; use `gemini-3-pro-image` (Google's named replacement) or `gemini-3.1-flash-image`. The text model `gemini-3-pro-preview` is a different model, shut down 2026-03-09.
 - **`gemini-2.0-flash-exp`:** retired; use `gemini-3.1-flash-image`.
 
 ## Aspect Ratios
@@ -71,10 +76,7 @@ Control output resolution with the `imageSize` parameter. Note the **uppercase K
 | `2K` | Up to 2048×2048 | 3.1 Flash | Quality assets, detailed work |
 | `4K` | Up to 4096×4096 | 3.1 Flash | Print production, hero images, final assets |
 
-**Notes:**
-- Actual pixel dimensions depend on aspect ratio (e.g., 4K at 16:9 = 4096×2304)
-- Higher resolutions consume more tokens and cost more
-- Default is `1K` if `imageSize` is not specified
+Pixel dimensions follow the aspect ratio (4K at 16:9 = 4096×2304); higher tiers cost more tokens; `1K` is the default.
 
 ## API Configuration
 
@@ -98,14 +100,7 @@ https://generativelanguage.googleapis.com/v1beta/models/{model-id}:generateConte
 ```
 
 ### Image-Only Output Mode
-Force the model to return only an image (no text response):
-```json
-{
-  "generationConfig": {
-    "responseModalities": ["IMAGE"]
-  }
-}
-```
+Force the model to return only an image (no text response): `"generationConfig": {"responseModalities": ["IMAGE"]}`.
 
 ### Thinking Level
 Control how much the model "thinks" before generating. Higher levels improve complex compositions but increase latency:
