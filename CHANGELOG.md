@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extraction, search, markdown conversion, async AI crawling, and agentic
   browsing.
 
+### Fixed
+
+- `seo-content` now runs `content_quality.py` and `content_verify.py`. Both
+  shipped in 2.0.0 but no skill or agent called them, so `/seo content` never
+  used its own filler/AI-pattern scorer or its uncited-claim detector, even
+  though `content_verify.py` names that workflow and the hreflang
+  machine-translation reference already deferred to `seo-content` for it. The
+  skill and the `seo-content` agent document both commands, their exit codes,
+  and their limits (English-only phrase lists, a citation window that accepts
+  any nearby link), and the skill's output template gains an Automated Signals
+  table.
+
 ## [2.4.2] - 2026-10-04
 
 seo-cockpit, Google sign-in through your own account, and a schema-hook fix.

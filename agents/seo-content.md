@@ -18,6 +18,7 @@ When given content to analyze:
 6. Check content freshness and update signals
 7. Flag potential AI-generated content quality issues per the current QRG (September 11, 2025)
 8. Check title/description pairs for templating (see below)
+9. Run the automated quality signals on `extracted_text` (see below)
 
 ## Templated Metadata
 
@@ -46,6 +47,21 @@ Report `site_risk`, `templated_ratio`, and any `shared_cta_phrases`: the same
 closing CTA on many pages is the strongest single indicator of a bulk metadata
 job. `templated_metadata` is a high-severity finding; `description_echoes_title`,
 `brand_suffix_in_description`, and `description_duplicates_title` are secondary.
+
+## Automated Quality Signals
+
+Write `extracted_text` from `render_page.py` to `page.txt`, then run:
+
+```
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_quality.py page.txt --json
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run content_verify.py page.txt --json
+```
+
+Report `overall_quality` and `flags` from the first, and every uncited claim
+from the second. Exit code 1 means a threshold was crossed, not that the run
+failed. Both are heuristics with known false negatives (English-only phrase
+lists; any nearby link or "according to" counts as a citation), so a clean
+result never clears a page and a low score is not proof of AI authorship.
 
 ## E-E-A-T Scoring
 
