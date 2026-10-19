@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLERS = {
     "extensions/dataforseo/install.sh": (["field.json"], "CLAUDE_SEO_SECRET"),
     "extensions/firecrawl/install.sh": ([], "CLAUDE_SEO_SECRET"),
-    "extensions/scrapegraphai/install.sh": (["/opt/venv/bin/python"], "CLAUDE_SEO_SECRET"),
+    "extensions/scrapegraphai/install.sh": ([], "CLAUDE_SEO_SECRET"),
     "extensions/banana/install.sh": ([], "CLAUDE_SEO_SECRET"),
     "extensions/ahrefs/install.sh": ([], "CLAUDE_SEO_SECRET"),
     "extensions/profound/install.sh": ([], "CLAUDE_SEO_SECRET"),
@@ -107,7 +107,7 @@ PS1_WRITERS = {
     "extensions/profound/install.ps1": ([], "CLAUDE_SEO_SECRET"),
     "extensions/seranking/install.ps1": ([], "CLAUDE_SEO_SECRET"),
     "extensions/bing-webmaster/install.ps1": (["https://e.test/key.txt"], "CLAUDE_SEO_SECRET"),
-    "extensions/scrapegraphai/install.ps1": (["C:/venv/Scripts/python.exe"], "CLAUDE_SEO_SECRET"),
+    "extensions/scrapegraphai/install.ps1": ([], "CLAUDE_SEO_SECRET"),
 }
 
 

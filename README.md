@@ -414,7 +414,7 @@ Full Firecrawl docs: [extensions/firecrawl/README.md](extensions/firecrawl/READM
 
 ### ScrapeGraphAI
 
-Prompt-driven structured extraction, search, and AI crawling via the official [ScrapeGraphAI](https://scrapegraphai.com/) MCP server (Python, installed into an isolated venv).
+Prompt-driven structured extraction, search, async crawling, and page monitors via the hosted [ScrapeGraphAI](https://scrapegraphai.com/) MCP server (HTTP, Google sign-in or `sgai-` API key; nothing runs locally).
 
 ```bash
 ./extensions/scrapegraphai/install.sh
