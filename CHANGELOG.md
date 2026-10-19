@@ -86,6 +86,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refused redirect hops are now stopped before Chromium sends them.
+  Playwright never calls a route handler for a 30x hop, so the previous fix
+  could only discard a render after the hop request had reached its target
+  (a blind GET to, say, `localhost:9090` or a metadata address).
+  `make_safe_playwright_route_handler()` gains `guard_browser(browser)`,
+  called right after launch in `render_page.py`, `capture_screenshot.py` and
+  `analyze_visual.py`: a browser-level DevTools `Fetch` interception pauses
+  every request from any page, iframe or worker, hops included, and fails
+  the ones the route rule refuses. A refused subresource hop is now dropped
+  like any aborted subresource instead of failing the whole render; a refused
+  document redirect still fails it. `tests/test_browser_redirect_guard.py`
+  checks it against real Chromium and two local servers (skipped where
+  Chromium cannot launch).
+
+- `tests/test_runtime.py` no longer inherits the caller's
+  `CLAUDE_SEO_DATA_DIR`, `CLAUDE_PLUGIN_DATA` or `CLAUDE_PLUGIN_ROOT`. A
+  session that exported `CLAUDE_SEO_DATA_DIR` (claude.ai cloud environments
+  do) made three tests fail, because that variable outranks the
+  `CLAUDE_PLUGIN_DATA` the tests set.
+
 - `render_page.py --json` and `fetch_page.py --json` printed the whole page
   HTML twice (`content`, then `raw_content`) ahead of `extracted_text`, the
   field every scoring path reads. A 300 KB page produced about 620,000
@@ -119,8 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screenshot to a private address). The scripts now register
   `page.on("request", handler.watch_request)` and call
   `handler.check_redirects()`, which refuses the render and discards its
-  content, accessibility tree, screenshot, or measurements. The hop request
-  has already been sent when it is detected (SECURITY.md). On the raw path, a
+  content, accessibility tree, screenshot, or measurements; `guard_browser`
+  (above) now also stops the hop before it is sent. On the raw path, a
   non-public DNS pin (one that exists only through the allowlist) now
   answers for the audited port alone, so `localhost:8080` redirecting to
   `localhost:9090` is refused instead of following the pin.

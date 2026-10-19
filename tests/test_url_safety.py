@@ -1196,6 +1196,103 @@ def test_redirect_watch_fails_closed_on_an_unreadable_request() -> None:
         handler.check_redirects()
 
 
+class _FakeCDPSession:
+    def __init__(self, fail_enable: bool = False) -> None:
+        self.handlers: dict = {}
+        self.sent: list = []
+        self.fail_enable = fail_enable
+
+    def on(self, event, callback) -> None:
+        self.handlers[event] = callback
+
+    def send(self, method, params=None):
+        if method == "Fetch.enable" and self.fail_enable:
+            raise RuntimeError("Fetch domain unavailable")
+        self.sent.append((method, params))
+        return {}
+
+    def pause(self, request_id: str, url: str) -> None:
+        self.handlers["Fetch.requestPaused"]({"requestId": request_id, "request": {"url": url}})
+
+
+def _guarded(monkeypatch, session: _FakeCDPSession, **kwargs):
+    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
+    handler = url_safety.make_safe_playwright_route_handler(**kwargs)
+    browser = SimpleNamespace(new_browser_cdp_session=lambda: session)
+    handler.guard_browser(browser)
+    return handler
+
+
+def test_guard_intercepts_every_request_before_it_is_sent(monkeypatch) -> None:
+    session = _FakeCDPSession()
+    _guarded(monkeypatch, session)
+    assert session.sent[0] == (
+        "Fetch.enable",
+        {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+    )
+
+
+def test_guard_fails_a_refused_hop_and_continues_an_allowed_one(monkeypatch) -> None:
+    """A 30x hop pauses here like any request, so a refused one never leaves
+    the browser."""
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080")
+    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
+    session = _FakeCDPSession()
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        _guarded(monkeypatch, session, top_level_url="http://localhost:8080/")
+        session.pause("1", "http://localhost:8080/next")
+        session.pause("2", "http://localhost:9090/admin")
+        session.pause("3", "http://169.254.169.254/latest/meta-data/")
+        session.pause("4", "https://1.1.1.1/a.js")
+    assert session.sent[1:] == [
+        ("Fetch.continueRequest", {"requestId": "1"}),
+        ("Fetch.failRequest", {"requestId": "2", "errorReason": "BlockedByClient"}),
+        ("Fetch.failRequest", {"requestId": "3", "errorReason": "BlockedByClient"}),
+        ("Fetch.continueRequest", {"requestId": "4"}),
+    ]
+
+
+def test_guard_fails_closed_on_a_malformed_event(monkeypatch) -> None:
+    session = _FakeCDPSession()
+    _guarded(monkeypatch, session)
+    session.handlers["Fetch.requestPaused"]({"requestId": "9"})
+    assert session.sent[-1] == (
+        "Fetch.failRequest",
+        {"requestId": "9", "errorReason": "BlockedByClient"},
+    )
+
+
+@pytest.mark.parametrize("broken", ["session", "enable"])
+def test_guard_refuses_to_render_unguarded(monkeypatch, broken) -> None:
+    handler = url_safety.make_safe_playwright_route_handler()
+    if broken == "session":
+        def no_session():
+            raise RuntimeError("not Chromium")
+        browser = SimpleNamespace(new_browser_cdp_session=no_session)
+    else:
+        session = _FakeCDPSession(fail_enable=True)
+        browser = SimpleNamespace(new_browser_cdp_session=lambda: session)
+    with pytest.raises(url_safety.URLSafetyError, match="Cannot guard browser requests"):
+        handler.guard_browser(browser)
+
+
+def test_a_hop_the_guard_blocked_does_not_fail_the_render(monkeypatch) -> None:
+    """It never reached its target: an aborted subresource, nothing more. A
+    refused hop the guard did not see still refuses the render."""
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080")
+    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
+    session = _FakeCDPSession()
+    first = _FakeRedirectedRequest("http://localhost:8080/img")
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        handler = _guarded(monkeypatch, session, top_level_url="http://localhost:8080/")
+        handler.watch_request(_FakeRedirectedRequest("http://localhost:9090/pixel", first))
+        session.pause("1", "http://localhost:9090/pixel")
+        handler.check_redirects()
+        handler.watch_request(_FakeRedirectedRequest("http://localhost:9091/missed", first))
+    with pytest.raises(url_safety.URLSafetyError, match="localhost:9091"):
+        handler.check_redirects()
+
+
 def test_non_public_pin_answers_for_the_audited_port_only(monkeypatch) -> None:
     """A 30x from the allowlisted localhost:3000 to localhost:9090 would
     otherwise ride the pin; it takes the fall-through check instead."""

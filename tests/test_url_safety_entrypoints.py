@@ -155,8 +155,9 @@ def _calls_named(tree: ast.AST, name: str) -> list[ast.Call]:
 
 def test_every_chromium_launch_guards_routes_and_redirect_hops() -> None:
     """Each route handler knows its top-level URL (the only way a
-    CLAUDE_SEO_LOCAL_TARGETS origin can render), and each script watches the
-    redirect hops Playwright never routes, then refuses on a bad one."""
+    CLAUDE_SEO_LOCAL_TARGETS origin can render), each browser is guarded so a
+    refused redirect hop is never sent, and each script watches the hops
+    Playwright never routes, then refuses on a bad one."""
     checked = []
     for path in LAUNCHING_FILES:
         tree = _tree(path)
@@ -203,6 +204,11 @@ def test_every_chromium_launch_guards_routes_and_redirect_hops() -> None:
                 f"{name}:{call.lineno} guards a page, not its browser context; "
                 "popups opened with window.open() would escape the handler"
             )
+        guards = _calls_named(tree, "guard_browser")
+        assert len(guards) >= len(_chromium_launches(tree)), (
+            f"{name} launches Chromium without guard_browser(): redirect hops "
+            "would be sent before anything judges them"
+        )
         checked.append(name)
     assert len(checked) >= 3, f"expected the known launch sites, found {checked}"
 

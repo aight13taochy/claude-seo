@@ -101,6 +101,7 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=chromium_args)
+            route_handler.guard_browser(browser)
 
             # Desktop analysis
             desktop = browser.new_context(viewport={"width": 1920, "height": 1080})
