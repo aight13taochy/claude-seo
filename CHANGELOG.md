@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_url` from `google_auth`, or launches Chromium without the
   resolver pin.
 
+- `scripts/audit_score.py`: recomputes the SEO Health Score from the
+  category scores in `audit-data.json`. The full audit used to ask the model
+  to aggregate the score itself, and `google_report.py` printed whatever
+  number it wrote, so an arithmetic slip reached the PDF title page. The
+  script now owns the seven category weights (the SKILL.md tables restate
+  them, and a test keeps them in step). It rescales the weights when a
+  category could not be scored and reports that `coverage`, and lists
+  unweighted categories such as Backlink Profile, which never moved the
+  score. `seo-audit` step 5 runs it with `--write`. `google_report.py --type
+  full` fills a missing headline from the categories, and warns on stderr
+  when the declared score is more than 2 points off, without rewriting it.
+
 ### Changed
 
 - One URL-safety rule across CONTRIBUTING.md, CLAUDE.md, AGENTS.md,
@@ -139,7 +151,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     "According to ... study" was missed because the keywords were
     lower-case only.
 
+- `hooks/run-python-hook.js` handed the hook to the next Python candidate on
+  any spawn error, even after the chosen interpreter had passed its probe. A
+  hook could then run under an interpreter that was never selected, or run a
+  second time, and the launcher could still exit 1 instead of the hook's own
+  code. Only `ENOENT` (the interpreter vanished) now falls through; any other
+  spawn error stops with a message naming the interpreter. The intermittent
+  Windows CI timeout in `test_hook_launcher_preserves_blocking_exit_code_two`
+  had that signature (Node exited 1, not 2); this fix is not yet confirmed to
+  end it.
+
 ### Security
+
+- `/seo unlighthouse` no longer reaches private addresses through
+  unlighthouse's own DNS and redirects. `scripts/unlighthouse_run.py` used
+  to validate the target and then discard the pinned IP: unlighthouse's
+  Chromium re-resolved the host (DNS rebinding), and its Node crawler (axios)
+  followed any redirect, including to `http://169.254.169.254/`, and kept
+  the response HTML in the report. The generated config now passes
+  `chromium_launch_args()` as `puppeteerOptions.args`, and the new
+  `scripts/node_net_guard.cjs`, preloaded with `NODE_OPTIONS=--require`,
+  pins the audited host in every Node process and refuses connections to
+  non-public addresses. Loopback stays reachable from Node (Chromium's
+  DevTools port) and Chromium's third-party requests are unchecked; both are
+  documented in SECURITY.md. Verified end to end against unlighthouse 0.13.5
+  with a page redirecting to the metadata address.
 
 - Chromium is launched with `--host-resolver-rules` mapping the audited host
   to the IP `validate_url_strict()` validated (`render_page.py`,
