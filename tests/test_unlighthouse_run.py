@@ -358,7 +358,12 @@ const srv = http.createServer((req, res) => res.end("pinned")).listen(0, "127.0.
 @pytest.mark.parametrize(("pinned", "expected"), [(True, "pinned"), (False, "ERR ")])
 def test_node_preload_pins_the_audited_host(pinned, expected):
     pin_env = {"CLAUDE_SEO_PIN_HOST": "rebind.invalid", "CLAUDE_SEO_PIN_IP": "127.0.0.1"}
-    base = {"PATH": os.environ.get("PATH", "")}
+    # Keep the real environment: Node on Windows aborts at start-up without
+    # SYSTEMROOT. Drop only what would make the probe not test our preload.
+    base = {
+        k: v for k, v in os.environ.items()
+        if k not in ("NODE_OPTIONS", "CLAUDE_SEO_PIN_HOST", "CLAUDE_SEO_PIN_IP")
+    }
     env = ul.build_env(pin_env if pinned else {}, base=base)
     proc = subprocess.run(
         ["node", "-e", _NODE_PIN_PROBE], env=env, capture_output=True, text=True, timeout=30,
