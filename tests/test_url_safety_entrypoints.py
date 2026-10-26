@@ -170,7 +170,10 @@ def test_every_chromium_launch_guards_routes_and_redirect_hops() -> None:
             assert any(kw.arg == "top_level_url" for kw in call.keywords), (
                 f"{name}:{call.lineno} builds a route handler without top_level_url="
             )
-        routes = _calls_named(tree, "route")
+        # new_guarded_context() registers the route handler on the context it
+        # returns, so it counts as a route registration.
+        guarded = _calls_named(tree, "new_guarded_context")
+        routes = _calls_named(tree, "route") + guarded
         watches = [
             call
             for call in _calls_named(tree, "on")
@@ -193,12 +196,20 @@ def test_every_chromium_launch_guards_routes_and_redirect_hops() -> None:
             for node in ast.walk(tree)
             if isinstance(node, ast.Assign)
             and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Attribute)
-            and node.value.func.attr == "new_context"
+            and (
+                (
+                    isinstance(node.value.func, ast.Attribute)
+                    and node.value.func.attr == "new_context"
+                )
+                or (
+                    isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == "new_guarded_context"
+                )
+            )
             for target in node.targets
             if isinstance(target, ast.Name)
         }
-        for call in routes + watches:
+        for call in [c for c in routes + watches if isinstance(c.func, ast.Attribute)]:
             receiver = call.func.value
             assert isinstance(receiver, ast.Name) and receiver.id in contexts, (
                 f"{name}:{call.lineno} guards a page, not its browser context; "
@@ -308,10 +319,11 @@ def _fake_sync_playwright(captured: dict):
 def _render(url_and_ip: tuple[str, str], captured: dict) -> dict:
     import render_page
 
-    raw = SimpleNamespace(history=[], status_code=200, headers={}, url=url_and_ip[0])
+    raw = SimpleNamespace(history=[], status_code=200, headers={}, url=url_and_ip[0], close=lambda: None)
     with patch.object(render_page, "validate_url_strict", return_value=url_and_ip), \
          patch.object(render_page, "safe_requests_get", return_value=raw), \
-         patch.object(render_page, "decode_response_text", return_value="<div id=root></div>"), \
+         patch.object(render_page, "read_bounded", return_value=(b"", False)), \
+         patch.object(render_page, "decode_body", return_value="<div id=root></div>"), \
          patch.object(render_page, "sync_playwright", _fake_sync_playwright(captured)):
         return render_page.render_page(url_and_ip[0], mode="always", extract_content=False)
 
@@ -335,11 +347,12 @@ def test_render_page_raw_mode_never_builds_the_pin() -> None:
     """mode='never' never starts Chromium, so an unpinnable host is no reason to refuse."""
     import render_page
 
-    raw = SimpleNamespace(history=[], status_code=200, headers={}, url="https://app.example/")
+    raw = SimpleNamespace(history=[], status_code=200, headers={}, url="https://app.example/", close=lambda: None)
     with patch.object(render_page, "validate_url_strict",
                       return_value=("https://app.example/", "not-an-ip")), \
          patch.object(render_page, "safe_requests_get", return_value=raw), \
-         patch.object(render_page, "decode_response_text", return_value="<p>hi</p>"):
+         patch.object(render_page, "read_bounded", return_value=(b"", False)), \
+         patch.object(render_page, "decode_body", return_value="<p>hi</p>"):
         result = render_page.render_page("https://app.example/", mode="never",
                                          extract_content=False)
     assert result["error"] is None
