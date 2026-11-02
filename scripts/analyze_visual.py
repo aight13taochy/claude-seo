@@ -27,6 +27,7 @@ from url_safety import (  # noqa: E402  (sys.path massage above is intentional)
     URLSafetyError,
     chromium_launch_args,
     make_safe_playwright_route_handler,
+    new_guarded_context,
     validate_url_strict,
 )
 
@@ -104,10 +105,7 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
             route_handler.guard_browser(browser)
 
             # Desktop analysis
-            desktop = browser.new_context(viewport={"width": 1920, "height": 1080})
-            # On the context, not the page, so a window.open() popup is
-            # guarded too.
-            desktop.route("**/*", route_handler)
+            desktop = new_guarded_context(browser, route_handler, viewport={"width": 1920, "height": 1080})
             desktop.on("request", route_handler.watch_request)
             page = desktop.new_page()
             page.goto(url, wait_until="networkidle", timeout=timeout)
@@ -162,8 +160,7 @@ def analyze_visual(url: str, timeout: int = 30000) -> dict:
             desktop.close()
 
             # Mobile analysis
-            mobile = browser.new_context(viewport={"width": 375, "height": 812})
-            mobile.route("**/*", route_handler)
+            mobile = new_guarded_context(browser, route_handler, viewport={"width": 375, "height": 812})
             mobile.on("request", route_handler.watch_request)
             page = mobile.new_page()
             page.goto(url, wait_until="networkidle", timeout=timeout)

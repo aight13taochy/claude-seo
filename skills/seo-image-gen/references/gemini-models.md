@@ -1,10 +1,8 @@
 # Gemini Image Generation Models
 
-> Checked 2026-10-19 against ai.google.dev/gemini-api/docs/deprecations (page
-> dated 2026-10-12): the `-preview` image IDs shut down 2026-06-25 and
-> `gemini-2.5-flash-image` shuts down 2027-03-15 (it was released 2025-10-02).
-> If the MCP package defaults to a retired ID, set the model; confirm the
-> installed package accepts an ID before setting it.
+> Checked 2026-10-22 (ai.google.dev/gemini-api/docs/deprecations): `-preview` image IDs shut down 2026-06-25;
+> `gemini-2.5-flash-image` shuts down 2027-03-15 at the earliest. No shutdown announced: `gemini-nano-banana-2.1`
+> (2026-10-06), `gemini-3.1-flash-lite-image`, `gemini-3.1-flash-image`, `gemini-3-pro-image`.
 
 ## Current Models
 
@@ -32,12 +30,12 @@
 | Property | Value |
 |----------|-------|
 | **Model ID** | `gemini-2.5-flash-image` |
-| **Tier** | Nano Banana (original Flash image model; previous gen). **Shuts down 2027-03-15**; Google names `gemini-3.1-flash-lite-image` as the replacement |
+| **Tier** | Nano Banana (original Flash image model; previous gen). Earliest shutdown **2027-03-15**; Google names `gemini-3.1-flash-lite-image` as the replacement |
 | **Speed** | Fast |
 | **Aspect Ratios** | 1:1, 16:9, 9:16, 4:3, 3:4 |
 | **Max Resolution** | Up to 1024×1024 (1K tier) |
 | **Rate Limits (Free)** | ~10 RPM / ~500 RPD |
-| **Best For** | Nothing new: migrate existing uses before 2027-03-15 |
+| **Best For** | Nothing new: plan migration before 2027-03-15 |
 
 ## Retired Models (DO NOT USE)
 
