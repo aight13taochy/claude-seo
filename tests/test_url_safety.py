@@ -525,11 +525,15 @@ def test_route_handler_aborts_private_resolution() -> None:
 
 
 def test_route_handler_allows_data_urls() -> None:
-    """data:, blob:, chrome-extension: schemes are not DNS-bound."""
+    """Only inert, in-memory schemes can pass without DNS validation."""
     handler = url_safety.make_safe_playwright_route_handler()
     route = _FakeRoute()
     handler(route, _FakeRequest("data:image/png;base64,iVBOR..."))
     assert route.action == "continue"
+
+    route = _FakeRoute()
+    handler(route, _FakeRequest("file:///etc/passwd"))
+    assert route.action == "abort"
 
 
 def test_route_handler_blocks_specified_resource_types() -> None:
@@ -778,10 +782,12 @@ def test_proxy_hosts_is_empty_without_a_proxy(monkeypatch) -> None:
     assert url_safety._proxy_hosts("https://example.com/") == frozenset()
 
 
-def test_pin_dns_lets_the_exempt_proxy_host_resolve_to_loopback() -> None:
-    """The primitive honours whatever exempt set it is handed. Callers reach it
-    through _validated_proxy_hosts, which refuses a loopback proxy before it can
-    ever land in that set; this test pins the low-level contract only."""
+def test_pin_dns_lets_the_exempt_proxy_host_resolve_to_loopback(monkeypatch) -> None:
+    """The primitive lets an exempt proxy resolve to loopback only for an
+    endpoint admitted through CLAUDE_SEO_TRUSTED_PROXIES: that host on that
+    port. A plain set of hostnames exempts public proxies only, so nothing
+    but _validated_proxy_hosts can put a loopback proxy past the pin."""
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", "127.0.0.1:3128")
     original_getaddrinfo = socket.getaddrinfo
 
     def fake_getaddrinfo(host, port, *args, **kwargs):
@@ -794,10 +800,18 @@ def test_pin_dns_lets_the_exempt_proxy_host_resolve_to_loopback() -> None:
         with url_safety._pin_dns("pinned.example", "8.8.8.8", 443):
             with pytest.raises(socket.gaierror, match="non-public IP"):
                 socket.getaddrinfo("127.0.0.1", 3128)
+        # A bare hostname set carries no trusted endpoint: still refused.
         with url_safety._pin_dns(
             "pinned.example", "8.8.8.8", 443, exempt_hosts=frozenset({"127.0.0.1"})
         ):
+            with pytest.raises(socket.gaierror, match="non-public IP"):
+                socket.getaddrinfo("127.0.0.1", 3128)
+        exempt = _trusted_exempt(("127.0.0.1", 3128))
+        with url_safety._pin_dns("pinned.example", "8.8.8.8", 443, exempt_hosts=exempt):
             assert socket.getaddrinfo("127.0.0.1", 3128)[0][4][0] == "127.0.0.1"
+            # The proxy's port only, not the rest of that address.
+            with pytest.raises(socket.gaierror, match="non-public IP"):
+                socket.getaddrinfo("127.0.0.1", 8080)
 
 
 def test_pin_dns_exemption_does_not_leak_to_other_hosts() -> None:
@@ -815,6 +829,13 @@ def test_pin_dns_exemption_does_not_leak_to_other_hosts() -> None:
         ):
             with pytest.raises(socket.gaierror, match="non-public IP"):
                 socket.getaddrinfo("redirected.example", 80)
+
+
+def _trusted_exempt(*endpoints: tuple) -> frozenset:
+    """The exempt set _validated_proxy_hosts builds for trusted proxies."""
+    exempt = url_safety._ExemptProxies(host for host, _port in endpoints)
+    exempt.trusted = frozenset(endpoints)
+    return exempt
 
 
 def _fake_resolver(mapping: dict):
@@ -891,7 +912,10 @@ def _run_safe_get_with_proxy(monkeypatch, proxy_url: str, resolves: dict):
     ), patch.object(
         url_safety, "_pin_dns", side_effect=fake_pin
     ), patch.object(
-        url_safety.requests, "get", return_value=SimpleNamespace(status_code=200)
+        # With a proxy configured the request runs on a _ProxyGuardSession.
+        url_safety._ProxyGuardSession,
+        "request",
+        return_value=SimpleNamespace(status_code=200),
     ):
         captured["response"] = url_safety.safe_requests_get(
             "https://example.com/", timeout=5
@@ -952,8 +976,16 @@ def test_safe_requests_session_refuses_a_non_public_proxy(monkeypatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _clear_local_targets(monkeypatch):
-    """No test in this module inherits the developer's own allowlist."""
+    """No test in this module inherits the developer's own allowlists."""
     monkeypatch.delenv("CLAUDE_SEO_LOCAL_TARGETS", raising=False)
+    monkeypatch.delenv("CLAUDE_SEO_TRUSTED_PROXIES", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_proxy(monkeypatch):
+    """No test in this module inherits the developer's own HTTP proxy. A test
+    that wants one sets it with ``_system_proxies``."""
+    monkeypatch.setattr(url_safety.requests.utils, "getproxies", lambda: {})
 
 
 def _loopback_resolver(host_ips: dict):
@@ -1085,9 +1117,8 @@ def test_allowlisted_host_is_refused_as_a_redirect_target(monkeypatch) -> None:
 
 
 def test_allowlisted_host_is_refused_as_a_browser_subresource(monkeypatch) -> None:
-    """Without a top_level_url the Playwright route handler never reads the
-    allowlist, so a rendered page cannot pull a subresource off the
-    allowlisted dev server."""
+    """The Playwright route handler never reads the allowlist, so a rendered
+    page cannot pull a subresource off the allowlisted dev server."""
     monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:3000,127.0.0.1:8080")
     handler = url_safety.make_safe_playwright_route_handler()
     resolver = _loopback_resolver({"localhost": "127.0.0.1"})
@@ -1098,247 +1129,6 @@ def test_allowlisted_host_is_refused_as_a_browser_subresource(monkeypatch) -> No
         route = _FakeRoute()
         handler(route, _FakeRequest("http://127.0.0.1:8080/app.js", "script"))
         assert route.action == "abort"
-
-
-def _route_action(handler, url: str, resource_type: str = "document") -> str | None:
-    route = _FakeRoute()
-    handler(route, _FakeRequest(url, resource_type))
-    return route.action
-
-
-def test_route_handler_admits_the_allowlisted_top_level_origin(monkeypatch) -> None:
-    """The page under audit, and its own same-origin assets, render."""
-    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080,127.0.0.1:8080")
-    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        handler = url_safety.make_safe_playwright_route_handler(
-            top_level_url="http://localhost:8080/"
-        )
-        assert _route_action(handler, "http://localhost:8080/") == "continue"
-        assert _route_action(handler, "http://LocalHost.:8080/app.js", "script") == "continue"
-
-        literal = url_safety.make_safe_playwright_route_handler(
-            top_level_url="http://127.0.0.1:8080/"
-        )
-        assert _route_action(literal, "http://127.0.0.1:8080/") == "continue"
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://localhost:9090/",       # same host, another port
-        "http://localhost/",            # same host, default port
-        "https://localhost:8080/",      # same host and port, another scheme
-        "http://127.0.0.1:8080/",       # same machine, another spelling
-        "http://127.0.0.2:8080/",       # another loopback address
-        "http://192.168.1.10:8080/",    # a private address
-        "http://169.254.169.254/latest/meta-data/",
-    ],
-)
-def test_route_handler_exemption_is_the_exact_origin_only(monkeypatch, url) -> None:
-    """Every origin but the audited one keeps the default policy, even when
-    the allowlist would name it at the top level."""
-    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost,127.0.0.1:8080")
-    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        handler = url_safety.make_safe_playwright_route_handler(
-            top_level_url="http://localhost:8080/"
-        )
-        assert _route_action(handler, url) == "abort"
-
-
-def test_route_handler_ignores_an_unlisted_top_level_url(monkeypatch) -> None:
-    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:3000")
-    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        for top in ("http://localhost:8080/", "https://public.example/", "not a url"):
-            handler = url_safety.make_safe_playwright_route_handler(top_level_url=top)
-            assert _route_action(handler, "http://localhost:8080/") == "abort", top
-        monkeypatch.delenv("CLAUDE_SEO_LOCAL_TARGETS")
-        handler = url_safety.make_safe_playwright_route_handler(
-            top_level_url="http://localhost:3000/"
-        )
-        assert _route_action(handler, "http://localhost:3000/") == "abort"
-
-
-def test_route_handler_exemption_keeps_the_allowlist_ceiling(monkeypatch) -> None:
-    """A listed name that resolves to link-local, or a listed metadata
-    endpoint, is still refused inside the browser."""
-    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "sneaky.local:80,169.254.169.254:80")
-    resolver = _loopback_resolver({"sneaky.local": "169.254.169.254"})
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        handler = url_safety.make_safe_playwright_route_handler(
-            top_level_url="http://sneaky.local/"
-        )
-        assert _route_action(handler, "http://sneaky.local/") == "abort"
-        handler = url_safety.make_safe_playwright_route_handler(
-            top_level_url="http://169.254.169.254/"
-        )
-        assert _route_action(handler, "http://169.254.169.254/") == "abort"
-
-
-class _FakeRedirectedRequest(_FakeRequest):
-    def __init__(self, url: str, redirected_from=None) -> None:
-        super().__init__(url)
-        self.redirected_from = redirected_from
-
-
-def test_redirect_hops_are_judged_by_the_route_rule(monkeypatch) -> None:
-    """Playwright never routes a redirect hop; watch_request records the ones
-    the route handler would have aborted, and check_redirects refuses."""
-    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080")
-    resolver = _loopback_resolver({"localhost": "127.0.0.1", "cdn.example": "93.184.216.34"})
-    first = _FakeRedirectedRequest("http://localhost:8080/old")
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        handler = url_safety.make_safe_playwright_route_handler(
-            top_level_url="http://localhost:8080/"
-        )
-        handler.watch_request(first)  # not a redirect hop
-        handler.watch_request(_FakeRedirectedRequest("http://localhost:8080/new", first))
-        handler.watch_request(_FakeRedirectedRequest("https://cdn.example/a.js", first))
-        handler.check_redirects()
-        assert handler.redirect_violations == []
-
-        handler.watch_request(_FakeRedirectedRequest("http://localhost:9090/admin", first))
-        handler.watch_request(_FakeRedirectedRequest("http://169.254.169.254/", first))
-    assert handler.redirect_violations == [
-        "http://localhost:9090/admin",
-        "http://169.254.169.254/",
-    ]
-    with pytest.raises(url_safety.URLSafetyError, match="localhost:9090"):
-        handler.check_redirects()
-
-
-def test_redirect_watch_fails_closed_on_an_unreadable_request() -> None:
-    class _Broken:
-        @property
-        def redirected_from(self):
-            raise RuntimeError("target closed")
-
-    handler = url_safety.make_safe_playwright_route_handler()
-    handler.watch_request(_Broken())
-    with pytest.raises(url_safety.URLSafetyError):
-        handler.check_redirects()
-
-
-class _FakeCDPSession:
-    def __init__(self, fail_enable: bool = False) -> None:
-        self.handlers: dict = {}
-        self.sent: list = []
-        self.fail_enable = fail_enable
-
-    def on(self, event, callback) -> None:
-        self.handlers[event] = callback
-
-    def send(self, method, params=None):
-        if method == "Fetch.enable" and self.fail_enable:
-            raise RuntimeError("Fetch domain unavailable")
-        self.sent.append((method, params))
-        return {}
-
-    def pause(self, request_id: str, url: str) -> None:
-        self.handlers["Fetch.requestPaused"]({"requestId": request_id, "request": {"url": url}})
-
-
-def _guarded(monkeypatch, session: _FakeCDPSession, **kwargs):
-    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    handler = url_safety.make_safe_playwright_route_handler(**kwargs)
-    browser = SimpleNamespace(new_browser_cdp_session=lambda: session)
-    handler.guard_browser(browser)
-    return handler
-
-
-def test_guard_intercepts_every_request_before_it_is_sent(monkeypatch) -> None:
-    session = _FakeCDPSession()
-    _guarded(monkeypatch, session)
-    assert session.sent[0] == (
-        "Fetch.enable",
-        {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
-    )
-
-
-def test_guard_fails_a_refused_hop_and_continues_an_allowed_one(monkeypatch) -> None:
-    """A 30x hop pauses here like any request, so a refused one never leaves
-    the browser."""
-    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080")
-    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
-    session = _FakeCDPSession()
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        _guarded(monkeypatch, session, top_level_url="http://localhost:8080/")
-        session.pause("1", "http://localhost:8080/next")
-        session.pause("2", "http://localhost:9090/admin")
-        session.pause("3", "http://169.254.169.254/latest/meta-data/")
-        session.pause("4", "https://1.1.1.1/a.js")
-    assert session.sent[1:] == [
-        ("Fetch.continueRequest", {"requestId": "1"}),
-        ("Fetch.failRequest", {"requestId": "2", "errorReason": "BlockedByClient"}),
-        ("Fetch.failRequest", {"requestId": "3", "errorReason": "BlockedByClient"}),
-        ("Fetch.continueRequest", {"requestId": "4"}),
-    ]
-
-
-def test_guard_fails_closed_on_a_malformed_event(monkeypatch) -> None:
-    session = _FakeCDPSession()
-    _guarded(monkeypatch, session)
-    session.handlers["Fetch.requestPaused"]({"requestId": "9"})
-    assert session.sent[-1] == (
-        "Fetch.failRequest",
-        {"requestId": "9", "errorReason": "BlockedByClient"},
-    )
-
-
-@pytest.mark.parametrize("broken", ["session", "enable"])
-def test_guard_refuses_to_render_unguarded(monkeypatch, broken) -> None:
-    handler = url_safety.make_safe_playwright_route_handler()
-    if broken == "session":
-        def no_session():
-            raise RuntimeError("not Chromium")
-        browser = SimpleNamespace(new_browser_cdp_session=no_session)
-    else:
-        session = _FakeCDPSession(fail_enable=True)
-        browser = SimpleNamespace(new_browser_cdp_session=lambda: session)
-    with pytest.raises(url_safety.URLSafetyError, match="Cannot guard browser requests"):
-        handler.guard_browser(browser)
-
-
-def test_a_hop_the_guard_blocked_does_not_fail_the_render(monkeypatch) -> None:
-    """It never reached its target: an aborted subresource, nothing more. A
-    refused hop the guard did not see still refuses the render."""
-    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:8080")
-    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
-    session = _FakeCDPSession()
-    first = _FakeRedirectedRequest("http://localhost:8080/img")
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        handler = _guarded(monkeypatch, session, top_level_url="http://localhost:8080/")
-        handler.watch_request(_FakeRedirectedRequest("http://localhost:9090/pixel", first))
-        session.pause("1", "http://localhost:9090/pixel")
-        handler.check_redirects()
-        handler.watch_request(_FakeRedirectedRequest("http://localhost:9091/missed", first))
-    with pytest.raises(url_safety.URLSafetyError, match="localhost:9091"):
-        handler.check_redirects()
-
-
-def test_non_public_pin_answers_for_the_audited_port_only(monkeypatch) -> None:
-    """A 30x from the allowlisted localhost:3000 to localhost:9090 would
-    otherwise ride the pin; it takes the fall-through check instead."""
-    resolver = _loopback_resolver({"localhost": "127.0.0.1"})
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        with url_safety._pin_dns("localhost", "127.0.0.1", 3000):
-            assert socket.getaddrinfo("localhost", 3000)[0][4] == ("127.0.0.1", 3000)
-            for port in (9090, "9090", "http"):
-                with pytest.raises(socket.gaierror, match="non-public IP"):
-                    socket.getaddrinfo("localhost", port)
-
-
-def test_public_pin_still_answers_for_any_port() -> None:
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        with url_safety._pin_dns("audited.example", "93.184.216.34", 443):
-            assert socket.getaddrinfo("audited.example", 8443)[0][4] == ("93.184.216.34", 8443)
 
 
 def test_local_target_entries_are_normalized(monkeypatch) -> None:
@@ -1409,21 +1199,534 @@ def test_pin_dns_lets_a_dns_named_exempt_proxy_resolve_to_public() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLAUDE_SEO_TRUST_PROXY: a configured CONNECT proxy resolves the target
+# Redirects behind an HTTP proxy (GHSA-f8h8-fv8r-g2wh item 3)
 # ---------------------------------------------------------------------------
 #
-# The topology these tests model: no resolver in the process (every
-# getaddrinfo call fails), and an HTTP CONNECT proxy on loopback that applies
-# the network policy. Without the flag nothing can leave such a sandbox; with
-# it the proxy is trusted up to the CLAUDE_SEO_LOCAL_TARGETS ceiling.
+# Behind a proxy the proxy resolves each host, so the patched resolver in
+# _pin_dns never sees a redirect target. Every hop that is about to be sent
+# through a proxy must pass the strict validator first.
+
+_PROXY = "http://proxy.corp.example:8080"
+_PROXY_DNS = {
+    "proxy.corp.example": "8.8.4.4",
+    "start.example": "93.184.216.34",
+    "public.example": "93.184.216.35",
+    "internal.example": "10.0.0.5",
+    "localhost": "127.0.0.1",
+}
 
 
-def _no_resolver(host, port, *args, **kwargs):
-    raise socket.gaierror(socket.EAI_NONAME, f"no resolver in this sandbox ({host!r})")
+class _ProxyWire:
+    """Stands in for the network behind ``HTTPAdapter.send``.
+
+    ``script`` maps a URL to ``(status, location)``; anything else answers
+    200. Every request that would have left the machine is recorded with the
+    proxy it was sent through.
+    """
+
+    def __init__(self, script: dict):
+        self.script = script
+        self.sent: list[tuple[str, object]] = []
+
+    def send(self, request, **kwargs):
+        import io
+
+        import requests
+
+        proxy = requests.utils.select_proxy(request.url, kwargs.get("proxies") or {})
+        self.sent.append((request.url, proxy))
+        status, location = self.script.get(request.url, (200, None))
+        response = requests.Response()
+        response.status_code = status
+        response.url = request.url
+        response.request = request
+        response.raw = io.BytesIO(b"body")
+        if location:
+            response.headers["Location"] = location
+        return response
+
+    def urls(self) -> list[str]:
+        return [url for url, _proxy in self.sent]
 
 
-def _loopback_proxy(monkeypatch, scheme: str = "https") -> None:
-    _system_proxies(monkeypatch, {scheme: "http://127.0.0.1:3128"})
+def _behind_proxy(monkeypatch, script: dict, *, proxies=None) -> _ProxyWire:
+    """Configure an environment proxy, fake DNS, and a recording network."""
+    import requests
+
+    _system_proxies(
+        monkeypatch, {"http": _PROXY, "https": _PROXY} if proxies is None else proxies
+    )
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setattr(url_safety.socket, "getaddrinfo", _fake_resolver(_PROXY_DNS))
+    wire = _ProxyWire(script)
+    monkeypatch.setattr(
+        requests.adapters.HTTPAdapter, "send", lambda self, request, **kw: wire.send(request, **kw)
+    )
+    return wire
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "http://127.0.0.1:8000/admin",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.5/",
+        "http://[::1]/",
+        "http://2130706433/",
+        "https://localhost/",
+        "http://internal.example/",  # a public-looking name on a private address
+        "http://metadata.google.internal/",
+        "http://user:pw@public.example/",
+        "//127.0.0.1/",  # scheme-relative
+    ],
+)
+def test_proxied_redirect_to_a_non_public_target_is_never_sent(monkeypatch, location) -> None:
+    wire = _behind_proxy(monkeypatch, {"http://start.example/": (302, location)})
+    with pytest.raises(url_safety.ProxiedRequestRefused):
+        url_safety.safe_requests_get("http://start.example/", timeout=5)
+    # Only the validated first URL reached the proxy.
+    assert wire.sent == [("http://start.example/", _PROXY)]
+
+
+def test_proxied_redirect_to_a_non_http_scheme_is_never_sent(monkeypatch) -> None:
+    """requests has no transport for file: and friends; nothing is sent."""
+    import requests
+
+    wire = _behind_proxy(monkeypatch, {"http://start.example/": (302, "file:///etc/passwd")})
+    with pytest.raises(requests.exceptions.InvalidSchema):
+        url_safety.safe_requests_get("http://start.example/", timeout=5)
+    assert wire.urls() == ["http://start.example/"]
+
+
+def test_proxied_redirect_refusal_is_both_error_types(monkeypatch) -> None:
+    """Callers reach their existing error path either way: fetch_page catches
+    requests' ConnectionError first, sitemap_discovery catches URLSafetyError."""
+    import requests
+
+    _behind_proxy(monkeypatch, {"http://start.example/": (302, "http://10.0.0.5/")})
+    with pytest.raises(requests.exceptions.ConnectionError) as excinfo:
+        url_safety.safe_requests_get("http://start.example/", timeout=5)
+    assert isinstance(excinfo.value, url_safety.URLSafetyError)
+    assert "configured proxy" in str(excinfo.value)
+    assert "10.0.0.5" in str(excinfo.value)
+
+
+def test_proxied_redirect_to_a_public_target_is_followed(monkeypatch) -> None:
+    wire = _behind_proxy(
+        monkeypatch,
+        {
+            "http://start.example/": (301, "https://public.example/a"),
+            "https://public.example/a": (302, "/b"),
+        },
+    )
+    response = url_safety.safe_requests_get("http://start.example/", timeout=5)
+    assert response.status_code == 200
+    assert response.url == "https://public.example/b"
+    assert [hop.status_code for hop in response.history] == [301, 302]
+    assert wire.urls() == [
+        "http://start.example/",
+        "https://public.example/a",
+        "https://public.example/b",
+    ]
+
+
+def test_proxied_second_hop_to_a_private_target_is_refused(monkeypatch) -> None:
+    """The check runs on every hop, not just the first redirect."""
+    wire = _behind_proxy(
+        monkeypatch,
+        {
+            "http://start.example/": (302, "http://public.example/"),
+            "http://public.example/": (307, "http://internal.example/secret"),
+        },
+    )
+    with pytest.raises(url_safety.ProxiedRequestRefused):
+        url_safety.safe_requests_get("http://start.example/", timeout=5)
+    assert wire.urls() == ["http://start.example/", "http://public.example/"]
+
+
+def test_proxied_redirect_never_reads_the_local_allowlist(monkeypatch) -> None:
+    """CLAUDE_SEO_LOCAL_TARGETS is for the first, top-level URL only."""
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:3000,127.0.0.1:8080")
+    for location in ("http://localhost:3000/", "http://127.0.0.1:8080/"):
+        wire = _behind_proxy(monkeypatch, {"http://start.example/": (302, location)})
+        with pytest.raises(url_safety.ProxiedRequestRefused):
+            url_safety.safe_requests_get("http://start.example/", timeout=5)
+        assert wire.urls() == ["http://start.example/"]
+
+
+def test_proxied_head_redirect_is_validated(monkeypatch) -> None:
+    wire = _behind_proxy(monkeypatch, {"http://start.example/": (302, "http://10.0.0.5/")})
+    # HEAD does not follow redirects unless asked, exactly like requests.head.
+    response = url_safety.safe_requests_head("http://start.example/", timeout=5)
+    assert response.status_code == 302
+    with pytest.raises(url_safety.ProxiedRequestRefused):
+        url_safety.safe_requests_head(
+            "http://start.example/", timeout=5, allow_redirects=True
+        )
+    assert wire.urls() == ["http://start.example/", "http://start.example/"]
+
+
+def test_proxied_redirect_is_not_followed_when_the_caller_opts_out(monkeypatch) -> None:
+    """A caller that handles redirects itself still gets the 30x response."""
+    wire = _behind_proxy(monkeypatch, {"http://start.example/": (302, "http://10.0.0.5/")})
+    response = url_safety.safe_requests_get(
+        "http://start.example/", timeout=5, allow_redirects=False
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"] == "http://10.0.0.5/"
+    assert wire.urls() == ["http://start.example/"]
+
+
+def test_proxied_session_validates_every_hop_whatever_the_caller_passes(monkeypatch) -> None:
+    """The check sits in Session.send, so request-level hooks (which replace
+    session hooks in requests) cannot drop it."""
+    wire = _behind_proxy(monkeypatch, {"http://start.example/": (302, "http://internal.example/")})
+    seen = []
+    with url_safety.safe_requests_session("http://start.example/") as session:
+        with pytest.raises(url_safety.ProxiedRequestRefused):
+            session.get(
+                "http://start.example/",
+                timeout=5,
+                hooks={"response": [lambda r, *a, **k: seen.append(r.status_code)]},
+            )
+        # A second request on the session to a private host is refused too.
+        with pytest.raises(url_safety.ProxiedRequestRefused):
+            session.get("http://10.0.0.5/", timeout=5)
+        # A public one goes through.
+        assert session.get("http://public.example/", timeout=5).status_code == 200
+    assert seen == [302]
+    assert wire.urls() == ["http://start.example/", "http://public.example/"]
+
+
+def test_proxied_redirect_limit_still_applies(monkeypatch) -> None:
+    import requests
+
+    wire = _behind_proxy(
+        monkeypatch,
+        {
+            "http://start.example/": (302, "http://public.example/loop"),
+            "http://public.example/loop": (302, "http://public.example/loop"),
+        },
+    )
+    with url_safety.safe_requests_session("http://start.example/") as session:
+        session.max_redirects = 3
+        with pytest.raises(requests.exceptions.TooManyRedirects):
+            session.get("http://start.example/", timeout=5)
+    assert len(wire.sent) == 4
+
+
+def test_proxied_redirect_body_is_still_capped(monkeypatch) -> None:
+    """The redirect body cap hook keeps running on the guarded session."""
+    _behind_proxy(monkeypatch, {"http://start.example/": (302, "http://public.example/")})
+    response = url_safety.safe_requests_get("http://start.example/", timeout=5)
+    assert response.history[0]._content_consumed is True
+    assert len(response.history[0].content) <= url_safety.MAX_REDIRECT_BODY_BYTES
+
+
+def test_hop_through_a_proxy_is_validated_when_the_first_url_went_direct(monkeypatch) -> None:
+    """NO_PROXY exempts the first host only. The redirect target is sent
+    through the proxy, so it is validated although the first hop was not."""
+    wire = _behind_proxy(monkeypatch, {"http://start.example/": (302, "http://internal.example/")})
+    monkeypatch.setenv("NO_PROXY", "start.example")
+    with pytest.raises(url_safety.ProxiedRequestRefused):
+        url_safety.safe_requests_get("http://start.example/", timeout=5)
+    assert wire.sent == [("http://start.example/", None)]
+
+
+def test_explicit_proxies_argument_is_guarded_like_the_environment(monkeypatch) -> None:
+    wire = _behind_proxy(
+        monkeypatch, {"http://start.example/": (302, "http://10.0.0.5/")}, proxies={}
+    )
+    with pytest.raises(url_safety.ProxiedRequestRefused):
+        url_safety.safe_requests_get(
+            "http://start.example/", timeout=5, proxies={"http": _PROXY}
+        )
+    assert wire.sent == [("http://start.example/", _PROXY)]
+
+
+def test_allowlisted_first_url_still_works_behind_a_proxy(monkeypatch) -> None:
+    """The operator's top-level local target keeps its allowlist; only the
+    hops after it must be public."""
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:3000")
+    wire = _behind_proxy(monkeypatch, {"http://localhost:3000/": (302, "/next")})
+    response = url_safety.safe_requests_get("http://localhost:3000/", timeout=5)
+    assert response.status_code == 200
+    assert wire.urls() == ["http://localhost:3000/", "http://localhost:3000/next"]
+
+    # Another port on that host is a new target the allowlist does not name.
+    wire = _behind_proxy(
+        monkeypatch, {"http://localhost:3000/": (302, "http://localhost:9200/")}
+    )
+    with pytest.raises(url_safety.ProxiedRequestRefused):
+        url_safety.safe_requests_get("http://localhost:3000/", timeout=5)
+    assert wire.urls() == ["http://localhost:3000/"]
+
+
+def test_without_a_proxy_the_plain_requests_call_is_unchanged(monkeypatch) -> None:
+    """No proxy configured: requests.get is called exactly as before, and no
+    hop is validated by the proxy guard (the DNS pin covers direct hops)."""
+    monkeypatch.setattr(url_safety.socket, "getaddrinfo", _fake_resolver(_PROXY_DNS))
+    sentinel = SimpleNamespace(status_code=200)
+    with patch.object(url_safety.requests, "get", return_value=sentinel) as get, \
+         patch.object(url_safety._ProxyGuardSession, "request") as guarded:
+        assert url_safety.safe_requests_get("http://start.example/", timeout=5) is sentinel
+    get.assert_called_once()
+    assert get.call_args.args == ("http://start.example/",)
+    guarded.assert_not_called()
+
+
+def test_guard_session_does_not_validate_direct_requests(monkeypatch) -> None:
+    """Without a proxy the guarded session adds nothing: a direct hop is
+    left to the pinned resolver, as before."""
+    import requests
+
+    monkeypatch.setattr(url_safety.socket, "getaddrinfo", _fake_resolver(_PROXY_DNS))
+    wire = _ProxyWire({"http://start.example/": (302, "http://internal.example/")})
+    monkeypatch.setattr(
+        requests.adapters.HTTPAdapter, "send", lambda self, request, **kw: wire.send(request, **kw)
+    )
+    with patch.object(url_safety, "validate_public_url_strict") as validate:
+        with url_safety.safe_requests_session("http://start.example/") as session:
+            session.get("http://start.example/", timeout=5)
+    validate.assert_not_called()
+    # The fake network has no resolver, so the hop "arrives"; on a real
+    # direct connection _pin_dns refuses it at getaddrinfo.
+    assert wire.sent == [("http://start.example/", None), ("http://internal.example/", None)]
+
+
+# ---------------------------------------------------------------------------
+# validate_public_url_strict and upstream_http_proxy (browser egress guard)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_public_url_strict_ignores_the_allowlist(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "localhost:3000,127.0.0.1:8080,dev.example")
+    resolver = _fake_resolver({"localhost": "127.0.0.1", "dev.example": "192.168.1.20"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        for url in ("http://localhost:3000/", "http://127.0.0.1:8080/", "http://dev.example/"):
+            assert url_safety.validate_url_strict(url)[0] == url
+            with pytest.raises(url_safety.URLSafetyError):
+                url_safety.validate_public_url_strict(url)
+
+
+def _public_records(*addresses: str) -> list:
+    return [
+        (
+            socket.AF_INET6 if ":" in ip else socket.AF_INET,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+            "",
+            (ip, 443),
+        )
+        for ip in addresses
+    ]
+
+
+def test_validate_public_url_addresses_returns_every_address_pin_first() -> None:
+    records = _public_records("2606:2800:220:1::1", "93.184.216.35", "93.184.216.34")
+    with patch.object(url_safety.socket, "getaddrinfo", return_value=records) as lookup:
+        url, addresses = url_safety.validate_public_url_addresses("https://example.com/x")
+        assert lookup.call_count == 1
+        pinned = url_safety.validate_public_url_strict("https://example.com/x")[1]
+    assert url == "https://example.com/x"
+    assert addresses == ("93.184.216.34", "93.184.216.35", "2606:2800:220:1::1")
+    assert addresses[0] == pinned
+    assert all(url_safety.is_safe_ip(ip) for ip in addresses)
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        ("93.184.216.34", "10.0.0.7"),
+        ("93.184.216.34", "fd00::1"),
+        ("93.184.216.34", "::1"),
+        ("2606:2800:220:1::1", "64:ff9b::a00:1"),
+        ("169.254.169.254",),
+    ],
+)
+def test_validate_public_url_addresses_refuses_a_host_with_any_bad_record(
+    monkeypatch, records
+) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "example.com,10.0.0.7")
+    with patch.object(url_safety.socket, "getaddrinfo", return_value=_public_records(*records)):
+        with pytest.raises(url_safety.URLSafetyError):
+            url_safety.validate_public_url_addresses("https://example.com/")
+
+
+def test_validate_public_url_addresses_leaves_out_a_dns64_record() -> None:
+    """The synthesized AAAA beside an A record is passed over by the
+    validator, not checked as public, so it must never be offered for
+    dialling."""
+    records = _public_records("93.184.216.34", "64:ff9b::5db8:d822")
+    with patch.object(url_safety.socket, "getaddrinfo", return_value=records):
+        _, addresses = url_safety.validate_public_url_addresses("https://example.com/")
+    assert addresses == ("93.184.216.34",)
+
+
+def test_validate_public_url_addresses_ip_literal() -> None:
+    assert url_safety.validate_public_url_addresses("https://93.184.216.34/")[1] == (
+        "93.184.216.34",
+    )
+    with pytest.raises(url_safety.URLSafetyError):
+        url_safety.validate_public_url_addresses("https://127.0.0.1/")
+
+
+def test_validate_public_url_strict_accepts_public_hosts() -> None:
+    resolver = _fake_resolver({"example.com": "93.184.216.34"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        assert url_safety.validate_public_url_strict("https://example.com/x") == (
+            "https://example.com/x",
+            "93.184.216.34",
+        )
+
+
+def test_upstream_http_proxy_is_none_without_a_proxy() -> None:
+    assert url_safety.upstream_http_proxy("https://example.com/") is None
+
+
+def test_upstream_http_proxy_returns_a_validated_address(monkeypatch) -> None:
+    _system_proxies(
+        monkeypatch,
+        {"https": "http://us%40er:p%3Ass@proxy.corp.example:3128", "http": "proxy.corp.example"},
+    )
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    resolver = _fake_resolver({"proxy.corp.example": "8.8.4.4"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        address, port, authorization = url_safety.upstream_http_proxy("https://example.com/")
+        assert (address, port) == ("8.8.4.4", 3128)
+        import base64
+
+        assert authorization == "Basic " + base64.b64encode(b"us@er:p:ss").decode()
+        # No scheme, no port, no credentials: http on port 80.
+        assert url_safety.upstream_http_proxy("http://example.com/") == ("8.8.4.4", 80, None)
+
+
+def test_upstream_http_proxy_honours_no_proxy(monkeypatch) -> None:
+    _system_proxies(monkeypatch, {"https": "http://proxy.corp.example:3128"})
+    monkeypatch.setenv("NO_PROXY", "direct.example")
+    assert url_safety.upstream_http_proxy("https://direct.example/") is None
+
+
+@pytest.mark.parametrize(
+    "proxy_url,message",
+    [
+        ("http://127.0.0.1:3128", "Refusing configured HTTP proxy"),
+        ("http://169.254.169.254", "Refusing configured HTTP proxy"),
+        ("http://proxy.internal.example:3128", "Refusing configured HTTP proxy"),
+        ("socks5://proxy.corp.example:1080", "Only http:// proxies"),
+        ("https://proxy.corp.example:3129", "Only http:// proxies"),
+    ],
+)
+def test_upstream_http_proxy_refuses_unusable_proxies(monkeypatch, proxy_url, message) -> None:
+    """A refused proxy is an error, never a silent direct connection."""
+    _system_proxies(monkeypatch, {"https": proxy_url})
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    resolver = _fake_resolver(
+        {"proxy.corp.example": "8.8.4.4", "proxy.internal.example": "10.1.2.3"}
+    )
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        with pytest.raises(url_safety.URLSafetyError, match=message):
+            url_safety.upstream_http_proxy("https://example.com/")
+
+
+# ---------------------------------------------------------------------------
+# CLAUDE_SEO_TRUSTED_PROXIES: the operator names its own sandbox proxy (#280)
+# ---------------------------------------------------------------------------
+
+
+def test_trusted_proxies_unset_keeps_refusing_a_loopback_proxy(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_SEO_TRUSTED_PROXIES", raising=False)
+    with pytest.raises(url_safety.URLSafetyError, match="Refusing configured HTTP proxy"):
+        url_safety._validate_proxy_endpoint("127.0.0.1", 3128)
+
+
+@pytest.mark.parametrize("value", ["127.0.0.1", "127.0.0.1:3128", " 10.0.0.9 , 127.0.0.1:3128 "])
+def test_trusted_proxies_exempts_a_listed_loopback_proxy(monkeypatch, value) -> None:
+    """Anthropic-hosted Claude Code cloud sessions send all egress through a
+    CONNECT proxy on 127.0.0.1; listing it lets safe fetches leave the sandbox."""
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", value)
+    captured = _run_safe_get_with_proxy(
+        monkeypatch, "http://127.0.0.1:3128", {"example.com": "93.184.216.34"}
+    )
+    assert captured["exempt"] == frozenset({"127.0.0.1"})
+    assert captured["response"].status_code == 200
+
+
+def test_trusted_proxies_port_must_match(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", "127.0.0.1:3128")
+    with pytest.raises(url_safety.URLSafetyError, match="Refusing configured HTTP proxy"):
+        url_safety._validate_proxy_endpoint("127.0.0.1", 8080)
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["169.254.169.254", "100.100.100.200", "metadata.google.internal", "0.0.0.0", "fe80::1"],
+)
+def test_trusted_proxies_never_unblock_metadata_or_link_local(monkeypatch, host) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", f"{host},[{host}]:3128,{host}:3128")
+    with pytest.raises(url_safety.URLSafetyError):
+        url_safety._validate_proxy_endpoint(host, 3128)
+
+
+def test_trusted_proxy_name_must_resolve_into_the_opt_in_ranges(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", "sneaky.proxy:3128")
+    resolver = _fake_resolver({"sneaky.proxy": "169.254.169.254"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        with pytest.raises(url_safety.URLSafetyError, match="Refusing trusted HTTP proxy"):
+            url_safety._validate_proxy_endpoint("sneaky.proxy", 3128)
+
+
+def test_trusted_proxy_name_on_loopback_is_exempted(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", "proxy.sandbox:3128")
+    resolver = _fake_resolver({"proxy.sandbox": "127.0.0.1"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        assert url_safety._validate_proxy_endpoint("Proxy.Sandbox", 3128) == "proxy.sandbox"
+
+
+def test_local_targets_do_not_trust_a_proxy(monkeypatch) -> None:
+    """The two lists never read each other: naming 127.0.0.1:3128 as an audit
+    target must not turn the proxy on that address into a trusted one."""
+    monkeypatch.delenv("CLAUDE_SEO_TRUSTED_PROXIES", raising=False)
+    monkeypatch.setenv("CLAUDE_SEO_LOCAL_TARGETS", "127.0.0.1:3128")
+    with pytest.raises(url_safety.URLSafetyError, match="Refusing configured HTTP proxy"):
+        url_safety._validate_proxy_endpoint("127.0.0.1", 3128)
+
+
+def test_trusted_proxies_do_not_allow_an_audit_target(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_SEO_LOCAL_TARGETS", raising=False)
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", "127.0.0.1:3128")
+    assert url_safety.validate_url("http://127.0.0.1:3128/") is False
+
+
+def test_pin_dns_rechecks_a_trusted_proxy_name_with_the_opt_in_policy(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", "proxy.sandbox:3128,evil.sandbox:3128")
+    resolver = _fake_resolver(
+        {"proxy.sandbox": "127.0.0.1", "evil.sandbox": "169.254.169.254"}
+    )
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
+        exempt = _trusted_exempt(("proxy.sandbox", 3128), ("evil.sandbox", 3128))
+        with url_safety._pin_dns("pinned.example", "8.8.8.8", 443, exempt_hosts=exempt):
+            assert socket.getaddrinfo("proxy.sandbox", 3128)[0][4][0] == "127.0.0.1"
+            with pytest.raises(socket.gaierror, match="non-public IP 169.254.169.254"):
+                socket.getaddrinfo("evil.sandbox", 3128)
+
+
+# ---------------------------------------------------------------------------
+# CLAUDE_SEO_TRUST_PROXY (this fork): the environment's proxies are trusted
+# without being named, as if listed in CLAUDE_SEO_TRUSTED_PROXIES
+# ---------------------------------------------------------------------------
+#
+# The topology: a sandbox whose CONNECT proxy sits on loopback at a port chosen
+# per session, so no static CLAUDE_SEO_TRUSTED_PROXIES entry can name it.
+
+
+def _flag_and_loopback_proxy(monkeypatch, proxy_url: str = "http://127.0.0.1:3128") -> None:
+    monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
+    monkeypatch.delenv("CLAUDE_SEO_TRUSTED_PROXIES", raising=False)
+    _system_proxies(monkeypatch, {"https": proxy_url})
     monkeypatch.delenv("NO_PROXY", raising=False)
     monkeypatch.delenv("no_proxy", raising=False)
 
@@ -1439,183 +1742,116 @@ def test_trust_proxy_is_off_by_default(monkeypatch) -> None:
         assert url_safety._trust_proxy_enabled() is True
 
 
-def test_validate_url_strict_without_the_flag_still_needs_a_resolver(monkeypatch) -> None:
-    """Unset, the policy is exactly what it was: a proxy does not excuse DNS."""
+def test_trust_proxy_unset_trusts_nothing_it_was_not_told(monkeypatch) -> None:
+    """Unset, the policy is upstream's: a loopback proxy is refused."""
     monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    _loopback_proxy(monkeypatch)
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        with pytest.raises(url_safety.URLSafetyError, match="DNS resolution failed"):
-            url_safety.validate_url_strict("https://example.com/")
+    monkeypatch.delenv("CLAUDE_SEO_TRUSTED_PROXIES", raising=False)
+    _system_proxies(monkeypatch, {"https": "http://127.0.0.1:3128"})
+    assert url_safety._trusted_proxies() == ()
+    assert url_safety._is_trusted_proxy("127.0.0.1", 3128) is False
 
 
-def test_validate_url_strict_lets_a_trusted_proxy_resolve_the_target(monkeypatch) -> None:
-    monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
-    _loopback_proxy(monkeypatch)
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        assert url_safety.validate_url_strict("https://example.com/") == (
-            "https://example.com/",
-            url_safety.PROXY_RESOLVES,
-        )
+def test_trust_proxy_lists_the_environment_proxies_on_their_own_port(monkeypatch) -> None:
+    _flag_and_loopback_proxy(monkeypatch)
+    assert url_safety._trusted_proxies() == (("127.0.0.1", 3128),)
+    assert url_safety._is_trusted_proxy("127.0.0.1", 3128) is True
+    # Its own port only: another service on the same address is not a proxy.
+    assert url_safety._is_trusted_proxy("127.0.0.1", 9090) is False
 
 
-def test_trusted_proxy_does_not_cover_a_direct_connection(monkeypatch) -> None:
-    """The flag follows the proxy selection: a NO_PROXY match, or no proxy at
-    all, is a direct connection and keeps the full resolve-and-pin policy."""
-    monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
-    _loopback_proxy(monkeypatch)
-    monkeypatch.setenv("NO_PROXY", "direct.example")
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        with pytest.raises(url_safety.URLSafetyError, match="DNS resolution failed"):
-            url_safety.validate_url_strict("https://direct.example/")
-    _system_proxies(monkeypatch, {})
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        with pytest.raises(url_safety.URLSafetyError, match="DNS resolution failed"):
-            url_safety.validate_url_strict("https://example.com/")
+def test_trust_proxy_adds_to_an_explicit_list(monkeypatch) -> None:
+    _flag_and_loopback_proxy(monkeypatch)
+    monkeypatch.setenv("CLAUDE_SEO_TRUSTED_PROXIES", "proxy.corp.example:8080")
+    assert set(url_safety._trusted_proxies()) == {("proxy.corp.example", 8080), ("127.0.0.1", 3128)}
 
 
 @pytest.mark.parametrize(
-    "url",
-    [
-        "http://169.254.169.254/latest/meta-data/",
-        "http://metadata.google.internal/",
-        "http://localhost/",
-        "http://127.0.0.1/",
-        "http://10.0.0.5/",
-        "http://user@example.com/",
-        "ftp://example.com/",
-    ],
+    "proxy_url",
+    ["http://127.0.0.1:3128", "http://10.0.0.5:3128", "http://192.168.1.10:8080",
+     "http://100.101.102.103:3128", "http://localhost:3128"],
 )
-def test_trusted_proxy_keeps_every_parse_time_refusal(monkeypatch, url) -> None:
-    """Trusting the proxy relaxes resolution, nothing else: blocklisted names,
-    private literals, authority confusion and schemes are refused before the
-    proxy is consulted."""
-    monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
-    _system_proxies(
-        monkeypatch, {"http": "http://127.0.0.1:3128", "https": "http://127.0.0.1:3128"}
-    )
-    monkeypatch.delenv("NO_PROXY", raising=False)
-    monkeypatch.delenv("no_proxy", raising=False)
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        with pytest.raises(url_safety.URLSafetyError):
-            url_safety.validate_url_strict(url)
-
-
-@pytest.mark.parametrize(
-    "proxy_host",
-    ["127.0.0.1", "10.0.0.5", "192.168.1.10", "100.101.102.103", "localhost"],
-)
-def test_trusted_proxy_may_sit_on_loopback_or_a_private_range(monkeypatch, proxy_host) -> None:
-    monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
+def test_trust_proxy_admits_loopback_and_private_proxies(monkeypatch, proxy_url) -> None:
+    _flag_and_loopback_proxy(monkeypatch, proxy_url)
+    host = url_safety.urlparse(proxy_url).hostname
+    port = url_safety.urlparse(proxy_url).port
     resolver = _fake_resolver({"localhost": "127.0.0.1"})
     with patch.object(url_safety.socket, "getaddrinfo", side_effect=resolver):
-        assert url_safety._assert_proxy_host_is_public(proxy_host) == proxy_host
+        normalized, addresses, trusted = url_safety._resolve_proxy_endpoint(host, port)
+    assert trusted is True
+    assert normalized == host
+    assert addresses
 
 
 @pytest.mark.parametrize(
-    "proxy_host",
-    [
-        "169.254.169.254",        # cloud metadata / link-local
-        "100.100.100.200",        # Alibaba metadata, inside RFC 6598
-        "metadata.google.internal",
-        "0.0.0.0",
-        "224.0.0.1",              # multicast
-    ],
+    "proxy_url",
+    ["http://169.254.169.254:3128", "http://100.100.100.200:3128",
+     "http://metadata.google.internal:3128", "http://0.0.0.0:3128", "http://224.0.0.1:3128"],
 )
-def test_trusted_proxy_never_admits_metadata_or_link_local(monkeypatch, proxy_host) -> None:
-    """Same ceiling as CLAUDE_SEO_LOCAL_TARGETS: the trapdoor every "allow
-    local" flag falls through stays shut."""
-    monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
+def test_trust_proxy_never_admits_metadata_or_link_local(monkeypatch, proxy_url) -> None:
+    """Same ceiling as a listed entry: the trapdoor every "allow local" flag
+    falls through stays shut."""
+    _flag_and_loopback_proxy(monkeypatch, proxy_url)
+    host = url_safety.urlparse(proxy_url).hostname
     with patch.object(url_safety.socket, "getaddrinfo", side_effect=_fake_resolver({})):
         with pytest.raises(url_safety.URLSafetyError, match="Refusing configured HTTP proxy"):
-            url_safety._assert_proxy_host_is_public(proxy_host)
+            url_safety._resolve_proxy_endpoint(host, 3128)
 
 
-def test_trusted_proxy_named_host_is_judged_by_the_same_ceiling(monkeypatch) -> None:
-    monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
+def test_trust_proxy_named_host_is_judged_by_the_same_ceiling(monkeypatch) -> None:
+    _flag_and_loopback_proxy(monkeypatch, "http://proxy.corp.example:3128")
     private = _fake_resolver({"proxy.corp.example": "10.1.2.3"})
     with patch.object(url_safety.socket, "getaddrinfo", side_effect=private):
-        assert url_safety._assert_proxy_host_is_public("proxy.corp.example") == "proxy.corp.example"
-    metadata = _fake_resolver({"proxy.evil.example": "169.254.169.254"})
+        assert url_safety._resolve_proxy_endpoint("proxy.corp.example", 3128)[2] is True
+    metadata = _fake_resolver({"proxy.corp.example": "169.254.169.254"})
     with patch.object(url_safety.socket, "getaddrinfo", side_effect=metadata):
-        with pytest.raises(url_safety.URLSafetyError, match="non-public IP 169.254.169.254"):
-            url_safety._assert_proxy_host_is_public("proxy.evil.example")
-
-
-def test_pin_dns_with_proxy_resolves_falls_through_for_the_target() -> None:
-    """PROXY_RESOLVES must never be answered with a fabricated address: a
-    target lookup that does reach the process goes through the real resolver
-    and the fall-through check like any other name."""
-
-    def fake_getaddrinfo(host, port, *args, **kwargs):
-        if host == "pinned.example":
-            return _addrinfo("10.0.0.9", port or 443)
-        return _addrinfo("8.8.8.8", port or 443)
-
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=fake_getaddrinfo):
-        with url_safety._pin_dns("pinned.example", url_safety.PROXY_RESOLVES, 443):
-            with pytest.raises(socket.gaierror, match="non-public IP"):
-                socket.getaddrinfo("pinned.example", 443)
-        with url_safety._pin_dns("pinned.example", "8.8.8.8", 443):
-            assert socket.getaddrinfo("pinned.example", 443)[0][4][0] == "8.8.8.8"
+        with pytest.raises(url_safety.URLSafetyError, match="169.254.169.254"):
+            url_safety._resolve_proxy_endpoint("proxy.corp.example", 3128)
 
 
 def test_safe_requests_get_through_a_trusted_loopback_proxy(monkeypatch) -> None:
-    """End to end: no resolver, loopback proxy, flag set. The proxy is the
-    only exempt host and the request goes out."""
+    """End to end: loopback proxy, flag set, resolver available. The proxy is
+    the only exempt host and the request goes out."""
     monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
-    captured = _run_safe_get_with_proxy(monkeypatch, "http://127.0.0.1:8080", {})
+    monkeypatch.delenv("CLAUDE_SEO_TRUSTED_PROXIES", raising=False)
+    captured = _run_safe_get_with_proxy(
+        monkeypatch, "http://127.0.0.1:8080", {"example.com": "93.184.216.34"}
+    )
     assert captured["exempt"] == frozenset({"127.0.0.1"})
+    assert captured["exempt"].trusted == frozenset({("127.0.0.1", 8080)})
     assert captured["response"].status_code == 200
 
 
 def test_safe_requests_get_trusted_proxy_still_refuses_metadata_proxy(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
+    monkeypatch.delenv("CLAUDE_SEO_TRUSTED_PROXIES", raising=False)
     with pytest.raises(url_safety.URLSafetyError, match="Refusing configured HTTP proxy"):
-        _run_safe_get_with_proxy(monkeypatch, "http://169.254.169.254:3128", {})
+        _run_safe_get_with_proxy(
+            monkeypatch, "http://169.254.169.254:3128", {"example.com": "93.184.216.34"}
+        )
 
 
-def test_route_handler_trusts_the_proxy_to_resolve_names(monkeypatch) -> None:
-    monkeypatch.setenv("CLAUDE_SEO_TRUST_PROXY", "1")
-    _loopback_proxy(monkeypatch)
-    handler = url_safety.make_safe_playwright_route_handler()
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        route = _FakeRoute()
-        handler(route, _FakeRequest("https://cdn.example/app.js"))
-        assert route.action == "continue"
-        # Blocklisted names and private literals abort before the proxy is consulted.
-        for url in (
-            "https://metadata.google.internal/",
-            "https://169.254.169.254/",
-            "https://10.0.0.5/x",
-            "https://localhost/",
-        ):
-            route = _FakeRoute()
-            handler(route, _FakeRequest(url))
-            assert route.action == "abort", url
-        # A direct (NO_PROXY) request keeps the resolver check; no resolver, no request.
-        monkeypatch.setenv("NO_PROXY", "direct.example")
-        route = _FakeRoute()
-        handler(route, _FakeRequest("https://direct.example/"))
-        assert route.action == "abort"
+def test_trust_proxy_does_not_relax_target_resolution(monkeypatch) -> None:
+    """The flag names proxies only. A target that cannot be resolved, or
+    resolves to a private address, is refused exactly as without it."""
+    _flag_and_loopback_proxy(monkeypatch)
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_fake_resolver({})):
+        with pytest.raises(url_safety.URLSafetyError, match="DNS resolution failed"):
+            url_safety.validate_url_strict("https://example.com/")
+    private = _fake_resolver({"example.com": "10.0.0.9"})
+    with patch.object(url_safety.socket, "getaddrinfo", side_effect=private):
+        with pytest.raises(url_safety.URLSafetyError, match="non-public IP"):
+            url_safety.validate_url_strict("https://example.com/")
 
 
-def test_route_handler_without_the_flag_still_resolves(monkeypatch) -> None:
+def test_upstream_http_proxy_trusts_the_environment_proxy_for_the_browser(monkeypatch) -> None:
+    """The browser guard chains to the same proxy through the same policy."""
+    _flag_and_loopback_proxy(monkeypatch, "http://127.0.0.1:3128")
+    monkeypatch.setattr(
+        url_safety.requests.utils, "get_environ_proxies",
+        lambda url, no_proxy=None: {"https": "http://127.0.0.1:3128"},
+    )
+    assert url_safety.upstream_http_proxy("https://example.com/") == ("127.0.0.1", 3128, None)
     monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    _loopback_proxy(monkeypatch)
-    handler = url_safety.make_safe_playwright_route_handler()
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        route = _FakeRoute()
-        handler(route, _FakeRequest("https://cdn.example/app.js"))
-        assert route.action == "abort"
+    with pytest.raises(url_safety.URLSafetyError, match="Refusing configured HTTP proxy"):
+        url_safety.upstream_http_proxy("https://example.com/")
 
-
-def test_route_handler_judges_ip_literals_without_a_resolver(monkeypatch) -> None:
-    monkeypatch.delenv("CLAUDE_SEO_TRUST_PROXY", raising=False)
-    handler = url_safety.make_safe_playwright_route_handler()
-    with patch.object(url_safety.socket, "getaddrinfo", side_effect=_no_resolver):
-        route = _FakeRoute()
-        handler(route, _FakeRequest("https://1.1.1.1/"))
-        assert route.action == "continue"
-        route = _FakeRoute()
-        handler(route, _FakeRequest("https://192.168.1.10/"))
-        assert route.action == "abort"

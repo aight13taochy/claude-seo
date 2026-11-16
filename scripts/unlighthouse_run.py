@@ -10,8 +10,11 @@ support without a paid Google Cloud bill.
 
 This wrapper:
   - Validates the target via url_safety before any subprocess starts.
-  - Pins the audited host to the validated IP in every process that can
-    reach the network (see "SSRF and DNS rebinding" below).
+  - Runs the crawl behind the egress guard in ``browser_proxy.py``: Chrome
+    gets the guard as its proxy, and ``unlighthouse_http_proxy.cjs`` is
+    preloaded so the CLI's own Node requests (site check, robots.txt,
+    sitemaps, HTML link discovery) go through it too. Redirects to
+    loopback, private or metadata addresses are refused at each hop.
   - Invokes ``npx --yes unlighthouse-ci@0.13.5 …`` with sensible
     defaults (mobile form factor, JSON reporter, generated config file).
   - Captures the JSON result the CLI writes and returns it parsed,
@@ -38,43 +41,6 @@ The same generated config sets ``puppeteerClusterOptions.timeout``
 This guards against a single hung page consuming the whole crawl's
 time budget, independent of the subprocess-level ``--timeout``.
 
-SSRF and DNS rebinding
-======================
-Unlighthouse resolves DNS and follows redirects on its own, in two places
-Python's url_safety cannot reach:
-
-- **Chromium** (Puppeteer, and every Lighthouse run, which attaches to the
-  same browser through its DevTools port). Its whole traffic goes through
-  ``url_safety.EgressGuardProxy``, a local proxy this script runs for the
-  length of the scan: the generated config passes the proxy flags, with
-  ``chromium_launch_args(target, pinned_ip)``, as ``puppeteerOptions.args``
-  (forwarded to ``puppeteer.launch()`` via puppeteer-cluster,
-  https://unlighthouse.dev/api/config#puppeteeroptions). The proxy resolves
-  each host itself, refuses non-public addresses and connects to the address
-  it checked, so redirects, third-party subresources and popups are judged
-  like the page, and the audited origin always connects to the pre-flight IP.
-- **Node** (axios for robots.txt, sitemaps and every crawled route; got for
-  sitemaps). ``scripts/node_net_guard.cjs`` is preloaded through
-  ``NODE_OPTIONS=--require``: it pins the audited host and refuses any
-  connection to a non-public address, including redirects to IP literals
-  such as ``169.254.169.254``. Loopback is refused too, except the DevTools
-  ports of the Chromium instances the scan itself starts.
-
-Unlighthouse's own route discovery is switched off. Its crawler queues any
-link whose text merely contains the site URL (``https://site@10.0.0.1/``)
-or sits on a subdomain, and Lighthouse would load those routes in Chromium,
-which has no per-request guard and pins only the audited host. This script
-reads the site's sitemaps (or, without one, the target page's links)
-through url_safety and passes only URLs with the target's exact scheme,
-host and port as the config's ``urls``, which turns off unlighthouse's
-sitemap, robots.txt and crawler discovery (``resolveReportableRoutes`` in
-@unlighthouse/core 0.13.5).
-
-With a trusted proxy (``CLAUDE_SEO_TRUST_PROXY``) there is no local resolver
-to rebind and neither guard is applied, as in the other browser paths; the
-run then reports that in ``warnings``. Requests the guards refused are listed
-in ``blocked_requests``.
-
 Prerequisites
 =============
 Node.js 18+ available on ``$PATH``. The first run downloads
@@ -92,55 +58,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
-from collections import deque
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any
-from urllib.parse import urldefrag, urljoin, urlparse
-
-import lxml.html
-from lxml import etree
 
 _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from sitemap_discovery import (  # noqa: E402
-    MAX_DECLARED,
-    MAX_ROBOTS_BYTES,
-    MAX_SITEMAP_BYTES,
-    _bounded_fetch,
-    _robots_sitemaps,
-)
-from url_safety import (  # noqa: E402
-    PROXY_RESOLVES,
-    EgressGuardProxy,
-    URLSafetyError,
-    chromium_launch_args,
-    normalize_hostname,
-    validate_url_strict,
-)
+from browser_proxy import guarded_proxy  # noqa: E402
+from url_safety import URLSafetyError, validate_url_strict  # noqa: E402
 
 UNLIGHTHOUSE_PIN = "unlighthouse@0.13.5"
-NODE_NET_GUARD = Path(_SCRIPTS_DIR) / "node_net_guard.cjs"
-MAX_HOMEPAGE_BYTES = 5 * 1024 * 1024
-
-UNGUARDED_WARNING = (
-    "unlighthouse: a trusted proxy (CLAUDE_SEO_TRUST_PROXY) resolves the target, "
-    "so neither the Chromium egress proxy nor the Node guard is applied and the "
-    "proxy decides what the scan can reach. Only audit sites you trust (see "
-    "SECURITY.md)."
-)
-MAX_REPORTED_BLOCKS = 50
-# Proxies npm (npx) may connect through; the Node guard must not block them.
-# Matched case-insensitively: Windows upper-cases every os.environ key.
-_PROXY_ENV_KEYS = frozenset({
-    "https_proxy", "http_proxy", "all_proxy", "npm_config_proxy", "npm_config_https_proxy",
-})
 
 # Numeric metadata keys that are not per-category scores; excluded from
 # aggregate score averaging so a route's `score` (the Lighthouse overall
@@ -157,177 +89,26 @@ def _check_node() -> str | None:
     return None
 
 
-def build_config(
-    max_routes: int | None,
-    page_timeout_ms: int,
-    chromium_args: list[str] | None = None,
-    *,
-    urls: list[str] | None = None,
-) -> dict[str, Any]:
+def build_config(max_routes: int | None, page_timeout_ms: int, proxy_url: str) -> dict[str, Any]:
     """Build the object written to the generated unlighthouse config file.
 
     ``max_routes=None`` maps to ``scanner.maxRoutes: false`` (unlimited),
-    matching the documented type ``number | false``. ``chromium_args`` (from
-    ``chromium_launch_args``) go to ``puppeteerOptions.args``; ``urls``
-    replaces unlighthouse's own route discovery.
+    matching the documented type ``number | false``.
     """
-    config: dict[str, Any] = {
+    return {
+        # robots.txt, sitemap and HTML link discovery keep their upstream
+        # defaults. Unlighthouse 0.13.5 fetches them from Node (Axios with
+        # proxy=false, and sitemapper on got), which the preload in
+        # unlighthouse_http_proxy.cjs sends through the guarded proxy.
         "scanner": {"maxRoutes": max_routes if max_routes is not None else False},
+        "puppeteerOptions": {"args": [
+            f"--proxy-server={proxy_url}",
+            "--proxy-bypass-list=<-loopback>",
+            "--disable-quic",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ]},
         "puppeteerClusterOptions": {"timeout": page_timeout_ms},
     }
-    if chromium_args:
-        config["puppeteerOptions"] = {"args": list(chromium_args)}
-    if urls:
-        config["urls"] = list(urls)
-    return config
-
-
-def _origin_key(url: str) -> tuple[str, str, int] | None:
-    """(scheme, host, port) of an http(s) URL without userinfo, else None."""
-    try:
-        parsed = urlparse(url)
-        port = parsed.port
-    except ValueError:
-        return None
-    scheme = parsed.scheme.lower()
-    if scheme not in ("http", "https") or not parsed.hostname:
-        return None
-    if parsed.username is not None or parsed.password is not None:
-        return None
-    return scheme, parsed.hostname.rstrip("."), port or (443 if scheme == "https" else 80)
-
-
-def _sitemap_locs(content: bytes) -> tuple[str | None, list[str]]:
-    """Root element name and ``<loc>`` values of a sitemap or sitemap index."""
-    if b"<!DOCTYPE" in content.upper():
-        return None, []
-    parser = etree.XMLParser(
-        resolve_entities=False, no_network=True, load_dtd=False, recover=False, huge_tree=False,
-    )
-    try:
-        root = etree.fromstring(content, parser=parser)
-    except (etree.XMLSyntaxError, ValueError):
-        return None, []
-    locs = [
-        el.text.strip()
-        for el in root.iter()
-        if isinstance(el.tag, str) and etree.QName(el).localname == "loc" and el.text
-    ]
-    return etree.QName(root).localname.lower(), locs
-
-
-def _fetched_ok(result: dict) -> bool:
-    status = result["status_code"]
-    return not result["error"] and not result["too_large"] and status is not None and 200 <= status < 300
-
-
-def discover_routes(target: str, max_routes: int | None) -> list[str]:
-    """Same-origin URLs to scan, starting with ``target``.
-
-    Reads robots.txt ``Sitemap:`` lines and ``/sitemap.xml`` (following up
-    to ``MAX_DECLARED`` sitemap files, including index children), falling
-    back to the links on the target page when no sitemap lists a page.
-    Every fetch goes through url_safety; only URLs with the target's exact
-    scheme, host and port are kept, so unlighthouse never leaves the
-    pinned host.
-    """
-    key = _origin_key(target)
-    routes = [target]
-    if key is None:
-        return routes
-
-    def full() -> bool:
-        return max_routes is not None and len(routes) >= max_routes
-
-    def add(url: str) -> None:
-        url = urldefrag(url.strip())[0]
-        if not full() and _origin_key(url) == key and url not in routes:
-            routes.append(url)
-
-    scheme, host, port = key
-    default_port = 443 if scheme == "https" else 80
-    origin = f"{scheme}://{host}" + ("" if port == default_port else f":{port}")
-    queue = deque([f"{origin}/sitemap.xml"])
-    robots = _bounded_fetch(f"{origin}/robots.txt", MAX_ROBOTS_BYTES)
-    if _fetched_ok(robots):
-        declared = [u for u in _robots_sitemaps(robots["content"]) if _origin_key(u) == key]
-        queue.extendleft(reversed(declared))
-
-    seen: set[str] = set()
-    while queue and not full() and len(seen) < MAX_DECLARED:
-        sitemap_url = queue.popleft()
-        if sitemap_url in seen:
-            continue
-        seen.add(sitemap_url)
-        fetched = _bounded_fetch(sitemap_url, MAX_SITEMAP_BYTES)
-        if not _fetched_ok(fetched):
-            continue
-        kind, locs = _sitemap_locs(fetched["content"])
-        if kind == "sitemapindex":
-            queue.extend(loc for loc in locs if _origin_key(loc) == key)
-        elif kind == "urlset":
-            for loc in locs:
-                add(loc)
-
-    if len(routes) == 1 and not full():
-        page = _bounded_fetch(target, MAX_HOMEPAGE_BYTES)
-        if _fetched_ok(page) and page["content"].strip():
-            try:
-                hrefs = lxml.html.fromstring(page["content"]).xpath("//a/@href")
-            except (etree.ParserError, ValueError):
-                hrefs = []
-            for href in hrefs:
-                add(urljoin(target, str(href)))
-    return routes
-
-
-def node_require_option(path: PurePath) -> str:
-    """``--require "<path>"`` quoted the way Node parses NODE_OPTIONS.
-
-    Inside double quotes Node treats a backslash as an escape, so Windows
-    paths need their backslashes doubled; spaces stay inside the quotes.
-    """
-    escaped = str(path).replace("\\", "\\\\").replace('"', '\\"')
-    return f'--require "{escaped}"'
-
-
-def build_guard_env(target: str, pinned_ip: str, base_env: dict[str, str]) -> dict[str, str]:
-    """Environment that preloads ``node_net_guard.cjs`` into every Node process.
-
-    Returns ``base_env`` unchanged when a trusted proxy resolves the target
-    (``PROXY_RESOLVES``): there is no local resolver to rebind. The proxies
-    npm may need are passed as ``host:port`` in ``CLAUDE_SEO_NET_ALLOW``.
-    """
-    env = dict(base_env)
-    if pinned_ip == PROXY_RESOLVES:
-        return env
-    host = normalize_hostname(urlparse(target).hostname or "")
-    try:
-        host = host.encode("idna").decode("ascii")
-    except UnicodeError:
-        pass
-    allow = set()
-    for key, value in env.items():
-        if key.lower() not in _PROXY_ENV_KEYS or not value:
-            continue
-        proxy = urlparse(value if "://" in value else f"http://{value}")
-        try:
-            proxy_port = proxy.port or (443 if proxy.scheme == "https" else 80)
-        except ValueError:
-            continue
-        if proxy.hostname:
-            # host:port, not the host alone: a proxy on a private or loopback
-            # address must not open that machine's other ports to the crawl.
-            allow.add(f"{proxy.hostname.lower()}:{proxy_port}")
-    require = node_require_option(NODE_NET_GUARD)
-    env["NODE_OPTIONS"] = f"{env.get('NODE_OPTIONS', '')} {require}".strip()
-    env["CLAUDE_SEO_NET_GUARD"] = "1"
-    env["CLAUDE_SEO_PIN_HOST"] = host
-    env["CLAUDE_SEO_PIN_IP"] = pinned_ip
-    parsed = urlparse(target)
-    env["CLAUDE_SEO_PIN_PORT"] = str(parsed.port or (443 if parsed.scheme == "https" else 80))
-    env["CLAUDE_SEO_NET_ALLOW"] = ",".join(sorted(allow))
-    return env
 
 
 def write_config_file(out_dir: Path, config: dict[str, Any]) -> Path:
@@ -346,7 +127,7 @@ def build_cmd(target: str, *, device: str, out_dir: Path, config_path: Path) -> 
     ``packages/cli/src/createCli.ts`` and ``packages/cli/src/ci.ts`` upstream.
     """
     return [
-        "npx", "--yes", "--package", UNLIGHTHOUSE_PIN, "unlighthouse-ci",
+        shutil.which("npx") or "npx", "--yes", "--package", UNLIGHTHOUSE_PIN, "unlighthouse-ci",
         "--site", target,
         "--desktop" if device == "desktop" else "--mobile",
         "--output-path", str(out_dir),
@@ -427,8 +208,7 @@ def run(
     page_timeout: int = 60,
 ) -> dict:
     try:
-        target, pinned_ip = validate_url_strict(target)
-        chromium_args = chromium_launch_args(target, pinned_ip)
+        target, _ = validate_url_strict(target)
     except URLSafetyError as exc:
         return {"ok": False, "error": f"url_safety: {exc}"}
 
@@ -440,36 +220,30 @@ def run(
         prefix="claude-seo-unlighthouse-"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    urls = discover_routes(target, max_routes)
-    guarded = pinned_ip != PROXY_RESOLVES
-    proxy = EgressGuardProxy(target, pinned_ip).start() if guarded else None
     try:
-        if proxy is not None:
-            chromium_args = [*chromium_args, *proxy.chromium_args()]
-        config = build_config(max_routes, page_timeout * 1000, chromium_args, urls=urls)
-        config_path = write_config_file(out_dir, config)
-        cmd = build_cmd(target, device=device, out_dir=out_dir, config_path=config_path)
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-            env=build_guard_env(target, pinned_ip, dict(os.environ)),
-        )
+        with guarded_proxy() as proxy_url:
+            config = build_config(max_routes, page_timeout * 1000, proxy_url)
+            config_path = write_config_file(out_dir, config)
+            cmd = build_cmd(target, device=device, out_dir=out_dir, config_path=config_path)
+            preload = Path(__file__).with_name("unlighthouse_http_proxy.cjs")
+            env = os.environ.copy()
+            env["CLAUDE_SEO_GUARD_PROXY"] = proxy_url
+            env["NODE_OPTIONS"] = f'{env.get("NODE_OPTIONS", "")} --require="{preload.as_posix()}"'.strip()
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"unlighthouse timed out after {timeout}s",
                 "output_dir": str(out_dir)}
     except FileNotFoundError as exc:
         return {"ok": False, "error": f"npx invocation failed: {exc}"}
-    finally:
-        if proxy is not None:
-            proxy.stop()
-    blocked = list(proxy.refused) if proxy is not None else []
-    blocked += sorted(set(re.findall(r"claude-seo net guard: [^\n]*?is not a public address",
-                                     proc.stderr or "")))
 
     summary_path = out_dir / "ci-result.json"
     normalized: dict[str, Any] = {"routes": [], "route_count": 0, "aggregate_scores": {}}
@@ -493,9 +267,6 @@ def run(
         "aggregate_scores": normalized["aggregate_scores"],
         "stdout_tail": proc.stdout[-2000:] if proc.stdout else "",
         "stderr_tail": proc.stderr[-2000:] if proc.stderr else "",
-        "scanned_urls": len(urls),
-        "blocked_requests": blocked[:MAX_REPORTED_BLOCKS],
-        "warnings": [] if guarded else [UNGUARDED_WARNING],
     }
 
 
@@ -534,9 +305,6 @@ def main() -> int:
         timeout=args.timeout,
         page_timeout=args.page_timeout,
     )
-
-    for warning in result.get("warnings", []):
-        print(f"WARNING: {warning}", file=sys.stderr)
 
     if args.json:
         json.dump(result, sys.stdout, indent=2)

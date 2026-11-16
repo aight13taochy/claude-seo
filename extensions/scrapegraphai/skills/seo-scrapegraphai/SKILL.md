@@ -11,7 +11,7 @@ argument-hint: "[command] <url|query>"
 license: MIT
 compatibility: "Requires the hosted ScrapeGraphAI MCP server registered as `sgai` (Google sign-in or an sgai- API key)"
 metadata:
-  version: "2.5.0"
+  version: "2.6.2"
   category: seo
 ---
 
